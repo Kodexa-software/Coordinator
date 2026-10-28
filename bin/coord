@@ -3,7 +3,9 @@
 
 Knowledge lives in the project: <project>/.coordinator/<run>/ holds plan.md,
 tasks.json and one folder per task. Process state, logs and worktrees live in
-~/.coordinator/runs/<run>/, and `coord terminate` removes them.
+~/.coordinator/runs/<run>/. `coord terminate` removes both (the project folder stays
+when it holds saved unfinished work) and the task branches; the run branch with its
+pull request stays.
 
 Scheduling, merging and the live page are plain code and cost no tokens.
 Agents run as separate background `claude -p` sessions.
@@ -18,6 +20,7 @@ import re
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -110,6 +113,30 @@ def write_json(path, data):
 def nonempty(path):
     p = Path(path)
     return p.exists() and p.read_text().strip() != ""
+
+
+def remove_tree(path):
+    """Delete a folder. On errors, make everything in it writable and try again; returns what is still there."""
+    path = Path(path)
+    shutil.rmtree(path, ignore_errors=True)
+    if not path.exists():
+        return []
+
+    def writable(p):
+        if not p.is_symlink():
+            try:
+                os.chmod(p, stat.S_IMODE(p.lstat().st_mode) | (stat.S_IRWXU if p.is_dir() else stat.S_IRUSR | stat.S_IWUSR))
+            except OSError:
+                pass
+
+    writable(path)
+    for root, dirs, files in os.walk(path):  # top-down: a folder is made readable before the walk enters it
+        for n in dirs + files:
+            writable(Path(root) / n)
+    shutil.rmtree(path, ignore_errors=True)
+    if not path.exists():
+        return []
+    return [str(Path(root) / n) for root, dirs, files in os.walk(path) for n in files] or [str(path)]
 
 
 def slug(text, n=40):
@@ -960,6 +987,16 @@ def integrate(r, tid):
     if wt.exists():
         run(["git", "worktree", "remove", "--force", wt], cwd=r.project, check=False)
     r.log("merged %s" % tid)
+    # The run branch holds the work now. A fix task's parents kept their worktrees and branches until the fix merged
+    chain = [tid]
+    while find(data, chain[-1]).get("parent") and len(chain) <= len(data["tasks"]):
+        chain.append(find(data, chain[-1])["parent"])
+    for done in chain:
+        if done != tid and r.wt(done).exists():
+            run(["git", "worktree", "remove", "--force", r.wt(done)], cwd=r.project, check=False)
+        res = run(["git", "branch", "-D", r.task_branch(done)], cwd=r.project, check=False)
+        r.log("deleted the branch %s" % r.task_branch(done) if res.returncode == 0 else
+              "could not delete the branch %s: %s" % (r.task_branch(done), (res.stderr or res.stdout).strip()[-200:]))
     sync_pr(r)
 
 
@@ -1725,19 +1762,27 @@ def cmd_terminate(a):
         d["status"] = "finished" if all(t["status"] in ("done", "skipped") for t in d["tasks"]) else "paused"
         d["terminated"] = now()
         data = d
-    lines = ["terminated %s - stopped its agents and live page, removed its worktrees, task branches and internal files." % r.name]
+    # Saved work (now or by an earlier terminate) lives in the task folders: keep them unless --purge
+    keep = [t["id"] for t in data["tasks"] if nonempty(r.task_dir(t["id"]) / "wip.patch")]
+    left = remove_tree(r.dir) if a.purge or not keep else None
+    removed = "its worktrees, task branches, internal files and task files" if left == [] else \
+        "its worktrees, task branches and internal files"
+    lines = ["terminated %s - stopped its agents and live page, removed %s." % (r.name, removed)]
     for t in data["tasks"]:
         lines.append("  %s %s - %s, %s, %s tokens" % (t["id"], t["title"], t["status"], human_minutes(t.get("minutes")),
                                                      human_tokens(t.get("tokens"))))
     if data.get("branch") and git(r.project, "branch", "--list", data["branch"], check=False):
         lines.append("Kept: the run branch %s." % data["branch"])
-    if saved:
+    if saved and left is not None:
+        lines.append("Unfinished work in %s was deleted with the task files (--purge)." % ", ".join(saved))
+    elif saved:
         lines.append("Unfinished work saved as wip.patch in: %s" % ", ".join(saved))
-    if a.purge:
-        shutil.rmtree(r.dir, ignore_errors=True)
-        lines.append("Purged the knowledge folder %s." % r.dir)
-    else:
-        lines.append("Kept the knowledge in %s for later coordinators." % r.dir)
+    if left is None:
+        lines.append("Kept the task files in %s: they hold unfinished work (wip.patch in %s). "
+                     "`coord terminate %s --purge` deletes them." % (r.dir, ", ".join(keep), r.name))
+    elif left:
+        lines.append("Could not remove %d file(s) from %s: %s%s" % (len(left), r.dir, ", ".join(left[:10]),
+                                                                   " and more" if len(left) > 10 else ""))
     write_catalog(r.project)
     print("\n".join(lines))
 
@@ -1765,10 +1810,11 @@ def cmd_merge(a):
     except Exception as e:
         # Started from the live page, the record says "merging" before these checks run: leave the reason there
         error = str(e).strip() or repr(e)
-        with r.edit() as d:
-            m = d.get("merge") or {}
-            if m.get("status") == "merging" and m.get("pid") == os.getpid():
-                m.update(status="failed", error=error)
+        if r.tasks_file.exists():  # its terminate may have deleted the run's folder already
+            with r.edit() as d:
+                m = d.get("merge") or {}
+                if m.get("status") == "merging" and m.get("pid") == os.getpid():
+                    m.update(status="failed", error=error)
         raise e if isinstance(e, Fail) else Fail(error)
 
 
@@ -2609,9 +2655,11 @@ def main(argv=None):
     p = sub.add_parser("list", help="coordinators in this project")
     p.set_defaults(fn=cmd_list)
 
-    p = sub.add_parser("terminate", help="end a coordinator: stop everything and remove its internal files")
+    p = sub.add_parser("terminate", help="end a coordinator: stop everything, delete its task branches, internal files "
+                                         "and task files; keep the run branch with its pull request")
     p.add_argument("run", nargs="?")
-    p.add_argument("--purge", action="store_true", help="also delete its knowledge folder in the project")
+    p.add_argument("--purge", action="store_true",
+                   help="deleting the task files is now the default; this also deletes them when unfinished work was saved")
     p.set_defaults(fn=cmd_terminate)
 
     p = sub.add_parser("merge", help="merge every pull request of a run and its follow-up runs, then end them all")

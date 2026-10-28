@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1 - 2026-10-28
+
+- Each task's branch is deleted once it is merged into the run branch, so only the pull request's branch remains.
+- `coord terminate` deletes the run's task files in `.coordinator/`, read-only files included. A run that saved
+  unfinished work as `wip.patch` keeps them.
+- `/coordinate` runs `coord` without a permission prompt.
+
 ## 0.5.0 - 2026-10-28
 
 - New brand: logo, banner and a redesigned live page with smooth, calm motion and light and dark themes.

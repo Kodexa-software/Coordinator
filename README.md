@@ -103,7 +103,7 @@ any file or image, approve the plan with an answer per question, and see everyth
 | `/coordinate accept T3` / `retry T3` / `stop T3` | Settle a task / start it fresh / skip it |
 | `/coordinate update` | Update Coordinator |
 | `/coordinate merge` | Merge every pull request of the run and its follow-up runs, then end them all |
-| `/coordinate terminate` | End the run; keep the branch and the knowledge |
+| `/coordinate terminate` | End the run; keep the pull request's branch and delete the run's task files |
 | `coord map [areas]` | Build or refresh the project map that planners read first |
 
 With the clone install, every command also works in a terminal as `coord <command>`, with no model involved.
