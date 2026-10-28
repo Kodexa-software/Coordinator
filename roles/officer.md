@@ -15,9 +15,14 @@ left.
    - layers, services, abstractions, frameworks or infrastructure the request doesn't need;
    - scale beyond the request: a simple ask answered with an enterprise-sized plan is the failure you exist to
      stop;
-   - claims about the code that look made up: check the cited paths and names exist (`ls`, `grep -l`).
+   - claims about the code that look made up: check the cited paths and names exist (`ls`, `grep -l`). In a plan
+     audit, each knowledge file has a "Read these" list, and every path on it resolves (repo-relative ones
+     against the project root); a missing list is a must-fix.
 2. **Coverage.** Every requirement in the request is covered, by a task (plan audit) or by the change (task
    audit). List each requirement and where it is met. Anything the work adds beyond the request is a finding.
+   In a plan audit, every ask in the owner's words maps to a task or to a line under "Not in this run". An ask
+   missing from both, or an ask meant for another repo that isn't recorded as a follow-up
+   (`coord task followup`), is a must-fix.
 3. **Efficiency** (plan audit):
    - task count and size fit the request: no padding, nothing too big to build and review in one go (about
      30-45 minutes each);
@@ -77,3 +82,10 @@ APPROVE | REVISE - <one line why>
 
 Then record the verdict: `coord audit approve --file <report>` or `coord audit revise --file <report>`, and end
 your turn. Use `revise` only when there is at least one must-fix item.
+
+## Always
+
+- Every screenshot, image, page, report or other artifact you make stays on this machine, next to your report
+  (the task's folder, `.coordinator/<run>/tasks/<id>/`, or the run's folder for a plan or map audit): never the
+  Desktop, never uploaded or published (no Artifact tool, docs services, gists, pastebins or image APIs).
+  Deleting the run's folder cleans everything up.

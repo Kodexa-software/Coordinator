@@ -98,8 +98,8 @@ owner with `coord task ask`.
    - May change: <paths>
    - Must not change: <paths that are tempting but out of scope>
 
-   ## Where to look
-   - <path:lines> - <why it matters>
+   ## Read these
+   - <path:lines> - <why it matters, in one line>
 
    ## Decisions already taken
    - <decision> - <reason>
@@ -112,6 +112,11 @@ owner with `coord task ask`.
    ## Proof
    - <the existing checks and the gate that prove it; new tests only if this task's tests are on, named here>
    ```
+
+   "Read these" lists the path of every file the builder needs: the instruction files and required guides (with
+   sections), the code with line ranges, design references, and other repos' files with how to read them. Write
+   paths in the builder's own worktree repo-relative (its path isn't known yet) and everything else absolute.
+   The builder should not need to search: if you don't know a path, find it before you write the file.
 8. Write `plan.md`, short and plain, for the owner to approve:
 
    ```markdown
@@ -126,8 +131,12 @@ owner with `coord task ask`.
    ## Out of scope
    - <things a reader might expect that this plan deliberately doesn't do>
 
+   ## Not in this run
+   - <an ask from the owner's words that no task covers> - <where it goes>
+   (or "None.")
+
    ## Questions for the owner
-   1. <question> - default if unanswered: <default>
+   1. <question> - options: <option A> | <option B> - default if unanswered: <option A>
    (or "None.")
 
    ## Tasks
@@ -138,7 +147,15 @@ owner with `coord task ask`.
    - <risk> - <how the plan handles it>
    ```
 
-   Put any conflict between the project's rules and how Coordinator works under "Questions for the owner".
+   Keep each question on that one line: leave out `- options: ...` for an open question, but always give the
+   default. The live page shows each question with its options and lets the owner pick one, write their own
+   answer, or approve all defaults. Put any conflict between the project's rules and how Coordinator works under
+   "Questions for the owner".
+
+   No ask is dropped. Every ask in the owner's words (the request and every addition) maps to a task or to a line
+   under "Not in this run" saying where it goes. Never defer an ask for another repo silently: record it with
+   `coord task followup --repo "<absolute repo path>" "<the owner's asks for that repo, quoted>"`, and coord
+   starts that run when the owner approves. If it's unclear whether to split, ask under "Questions for the owner".
 9. Run `coord task done`, then end your turn with a 3-line summary.
 
 ## When you are sent back
@@ -164,4 +181,11 @@ link beats a copy.
 - To wait on something, run it in the background or use Monitor or `/loop`, and keep your turn open: your
   session ends when your turn does.
 - If a tool call is blocked with "The run is paused", run `coord task note "<exact next step>"` and end your turn.
+- A step only the owner can do (a deploy, adding a secret, merging another repo's PR, committing files outside
+  the repo): record it with `coord task todo "<what the owner must do, and why>"` and carry on. A decision that
+  blocks the work still goes under "Questions for the owner" or `coord task ask`.
+- Every screenshot, image, page, report or other artifact you make stays on this machine, in your task's folder
+  (the folder of your knowledge file, `.coordinator/<run>/tasks/<id>/`): never the Desktop, never uploaded or
+  published (no Artifact tool, docs services, gists, pastebins or image APIs). Deleting the run's folder cleans
+  everything up.
 - Never publish, push or commit anything.
