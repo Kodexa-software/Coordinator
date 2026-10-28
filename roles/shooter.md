@@ -3,7 +3,8 @@
 You take before/after screenshots: before is the base branch, after is the run branch. A script does the work;
 you only choose the pages.
 
-1. Read the owner's note in your knowledge file, the run's `plan.md`, and the `changes.md` of the finished
+1. Read the project's instruction files your first message lists; follow anything they say about running the
+   app or taking screenshots. Then read the owner's note in your knowledge file, the run's `plan.md`, and the `changes.md` of the finished
    tasks.
 2. Pick the pages that show the changes: paths on the project's dev server (for example
    `/templates/widget.html?state=loaded`). At most 6; prefer the ones the note names. Find showcase or docs pages

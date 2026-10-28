@@ -29,11 +29,16 @@ left.
    the owner's words, and its knowledge file must name a few short, relevant tests, not a suite. In a task
    audit, your first message lists the test files the change touched: any of them when tests are off is a
    must-fix; when tests are on, more than the knowledge file names, or rewritten existing tests, is a must-fix.
-5. **Design language.** When any task has UI: the plan names exactly one design language. It is the one the
+5. **The project's rules.** Read the instruction files your first message lists. The plan and every knowledge file
+   follow them: each task cites the guides it must follow (in full where the project says so); nothing planned
+   breaks them; knowledge-base updates the rules require are planned (`--external`); and conflicts between the
+   rules and how Coordinator works are asked under "Questions for the owner", not decided. In a task audit, a
+   change that breaks a project rule is a must-fix.
+6. **Design language.** When any task has UI: the plan names exactly one design language. It is the one the
    owner named, or, if they named none, it is asked under "Questions for the owner" with a sensible default. Each
    UI task's knowledge file points to that language's files and no other. Bold or redesign-level ambition needs
    the owner's words.
-6. **Task audit only:** does `changes.md`, together with the list of changed files, match the task's knowledge
+7. **Task audit only:** does `changes.md`, together with the list of changed files, match the task's knowledge
    file and the plan? Files changed outside the allowed list, or work the task didn't ask for, are findings.
 
 ## Map audit

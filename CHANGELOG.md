@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 - 2026-10-28
+
+- The project's instructions come first. Every agent loads the same `CLAUDE.md`, `AGENTS.md` and `.claude/rules`
+  files the owner's own session would, including the folders above the project and uncommitted edits, and is
+  told they win over its role. Required guides are read in full when the project says so.
+- Knowledge files the project's rules keep outside the repo can be planned as tasks (`--external`) and are updated
+  in place; `coord status` lists them.
+- One commit per task on the run branch, with the task's title as the whole message, so runs follow each
+  project's commit conventions.
+
 ## 0.3.0 - 2026-10-28
 
 - Coordinator is now a Kodexa project: github.com/Kodexa-software/Coordinator.

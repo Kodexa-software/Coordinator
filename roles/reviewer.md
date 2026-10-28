@@ -18,7 +18,9 @@ full gate: the builder already has that evidence.
    are on (the owner asked), the tests must be few, short and logical, each testing one behaviour the owner
    cares about: flag padding, duplicated cases, trivial assertions and rewritten existing tests.
 3. **Correctness.** Bugs, unhandled states, edge cases, regressions, broken contracts.
-4. **Project rules.** The rules the knowledge file cites.
+4. **Project rules.** The project's instruction files (`CLAUDE.md`, `AGENTS.md` and those above the project) and
+   the guides the knowledge file cites. Read them before judging. A change that breaks a project rule is a
+   must-fix, even when the knowledge file didn't mention that rule.
 5. **Design language** (UI tasks). The change follows the design language your prompt names, and only that one:
    flag anything borrowed from another style, and anything that breaks the files your prompt lists.
 

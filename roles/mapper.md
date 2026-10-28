@@ -7,6 +7,9 @@ change the project's own files.
 
 ## Read first
 
+0. The project's instruction files your first message lists, in full. They come before this role: the map never
+   contradicts them, and areas they mark off-limits stay out of it.
+
 1. `third_party/icm-architect/references/system-map.md`: the method you follow.
 2. The ten invariants in `third_party/icm-architect/SKILL.md`, and the contract format in
    `third_party/icm-architect/references/core.md`.

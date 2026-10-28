@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.3.0-c9a45c?style=flat-square">
+  <img alt="version" src="https://img.shields.io/badge/version-0.4.0-c9a45c?style=flat-square">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-1d2033?style=flat-square">
   <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-1d2033?style=flat-square">
   <img alt="scheduling" src="https://img.shields.io/badge/scheduling-zero%20tokens-c9a45c?style=flat-square">
@@ -160,6 +160,12 @@ licences, in [third_party/](third_party/README.md).
 
 ## Guard rails
 
+- **Your project's rules come first.** Every agent loads the instruction files your own Claude Code session would:
+  the project's `CLAUDE.md` and `AGENTS.md`, those of every folder above it, and `.claude/rules`. It reads the
+  current versions, uncommitted edits included, and the guides they require. Where a project rule and an agent's
+  role disagree, the project wins, and the reviewer and the officer check it. Conflicts with how Coordinator works
+  are put to you as questions. Knowledge files your rules keep outside the repo (plans, status, decisions) are
+  planned as tasks and updated in place.
 - **Your words are the spec.** The request, every later addition and every answer are kept word for word. The
   planner and the officer judge against all of them.
 - **No tests unless you ask.** A task's tests are off by default, and a hook blocks builders from touching test

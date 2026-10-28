@@ -209,6 +209,46 @@ def changed_files(wt, branch):
     return [x for x in out.splitlines() if x.strip()]
 
 
+INSTRUCTION_NAMES = ("CLAUDE.md", "AGENTS.md", "CLAUDE.local.md", ".claude/CLAUDE.md")
+
+
+def project_instructions(project):
+    """The instruction files the owner's own Claude Code session would load for this project, outermost first,
+    and the folders that hold them. Read from the main folder, so uncommitted edits count."""
+    chain, d, home = [], Path(project).resolve(), Path.home().resolve()
+    while True:
+        chain.append(d)
+        if d == home or d.parent == d:
+            break
+        d = d.parent
+    files, dirs, seen = [], [], set()
+    for d in reversed(chain):
+        found = [d / n for n in INSTRUCTION_NAMES if (d / n).is_file()]
+        rules = sorted((d / ".claude" / "rules").glob("*.md")) if (d / ".claude" / "rules").is_dir() else []
+        new = []
+        for f in found + rules:
+            if f.resolve() not in seen:
+                seen.add(f.resolve())
+                new.append(f)
+        if new:
+            files += new
+            dirs.append(d)
+    return files, dirs
+
+
+def instructions_block(r, role):
+    files, _ = project_instructions(r.project)
+    if not files:
+        return ["Project instructions: none found."]
+    lines = ["Project instructions: read these first, in full. They are the owner's current versions and come before "
+             "your role wherever the two disagree, including any guides they tell you to read:"]
+    lines += ["- %s" % f for f in files]
+    if role == "builder":
+        lines.append("Your worktree holds the committed copies of the project's files; where they differ from the "
+                     "files above, the files above win.")
+    return lines
+
+
 def load_config(project):
     cfg = json.loads(json.dumps(DEFAULTS))
     user = read_json(Path(project) / STORE / "config.json", {}) or {}
@@ -454,6 +494,7 @@ def write_agent_files(r):
 def agent_env(r, tid, role, cwd):
     env = dict(os.environ)
     env.update(COORD_PROJECT=str(r.project), COORD_RUN_DIR=str(r.dir), COORD_TASK=tid, COORD_ROLE=role, COORD_ROOT=str(ROOT),
+               CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD="1",
                COORD_WT=str(cwd), PATH="%s%s%s" % (ROOT / "bin", os.pathsep, env.get("PATH", "")))
     return env
 
@@ -500,12 +541,19 @@ def prepare_worktree(r, data, t):
     return wt
 
 
+def add_dirs(r, cwd):
+    _, dirs = project_instructions(r.project)
+    skip = {Path(cwd).resolve(), Path.home().resolve()}  # the user's own CLAUDE.md loads in every session anyway
+    extra = [d for d in dirs if Path(d).resolve() not in skip]
+    return ["--add-dir"] + [str(d) for d in extra] if extra else []
+
+
 def first_prompt(r, data, t, role, cwd):
     kd = r.task_dir(t["id"])
     lines = ["You are the %s for task %s (%s) in the coordinator run '%s'." % (ROLE_NAMES[role], t["id"], t["title"], r.name),
              "Coordinator's folder (bundled guides and roles): %s" % ROOT,
-             "Run folder: %s" % r.dir,
-             "Your knowledge file: %s - read it first, in full." % (kd / "knowledge.md")]
+             "Run folder: %s" % r.dir] + instructions_block(r, role) + [
+             "Your knowledge file: %s - read it next, in full." % (kd / "knowledge.md")]
     if role == "planner":
         if data.get("owner_notes"):
             lines += ["The owner has added to the request since:", owner_words(data).split("\n", 1)[1]]
@@ -519,6 +567,8 @@ def first_prompt(r, data, t, role, cwd):
                   "Write your changes file to: %s" % (kd / "changes.md"),
                   "Your reviewer writes to: %s" % (kd / "review.md"),
                   "Gate: %s (run it from %s in your worktree)." % (gate, r.cfg.get("gate_cwd", ".")),
+                  "Files outside your worktree you may edit in place (the scheduler doesn't commit them): %s"
+                  % (", ".join(t.get("external") or []) or "none"),
                   "Design language for this UI task: %s" % (design_line(data) if t.get("ui") else "not a UI task"),
                   "Tests for this task: %s" % ("ON - the owner asked for tests; write only the few the knowledge file names, short and to the point."
                                                if t.get("tests") else "OFF - don't add, change or delete any test file. If an existing test breaks because of your change, ask the owner with `coord task ask` instead of editing it.")]
@@ -574,6 +624,7 @@ def audit_prompt(r, data, t):
                           % (", ".join(tests) or "none", "ON (the planner says the owner asked)" if t.get("tests") else "OFF")]
     if rnd > 1:
         what.append("Your earlier reports are next to this one; check that what they asked for was done.")
+    what += instructions_block(r, "officer")
     return "\n".join(["You are the hallucination officer of the coordinator run '%s'." % r.name,
                       "Everything the owner has asked for, word for word (the request, then later additions and answers):",
                       "<<<", owner_words(data), ">>>"] + what + tests_line +
@@ -605,7 +656,7 @@ def start_job(r, kind, tid):
         cwd = r.project
         model = cfg["models"]["officer"]
         effort = cfg["efforts"]["officer"] if t["type"] == "plan" else cfg["efforts"].get("officer_task", "medium")
-        cmd = [cfg["claude"], "-p", "--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
+        cmd = [cfg["claude"], "-p"] + add_dirs(r, cwd) + ["--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
                "--settings", r.brain / "settings.json", "--output-format", "json", "-n", "%s:%s:officer" % (r.name, tid),
                "--append-system-prompt", role_prompt("officer"), "--session-id", str(uuid.uuid4()),
                audit_prompt(r, data, t)]
@@ -629,7 +680,7 @@ def start_job(r, kind, tid):
             t = dict(tt)
         model = t.get("model") or cfg["models"][role]
         effort = t.get("effort") or cfg["efforts"][role]
-        cmd = [cfg["claude"], "-p", "--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
+        cmd = [cfg["claude"], "-p"] + add_dirs(r, cwd) + ["--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
                "--settings", r.brain / "settings.json", "--output-format", "json", "-n", "%s:%s" % (r.name, tid),
                "--append-system-prompt", role_prompt(role)]
         if role == "builder":
@@ -754,13 +805,13 @@ def integrate(r, tid):
     wt = r.wt(tid)
     runwt = ensure_run_wt(r, data)
     if wt.exists():
-        commit_all(wt, "%s: %s" % (tid, t["title"]))
-    res = run(["git", "merge", "--no-ff", "--no-edit", "-m", "Merge %s: %s" % (tid, t["title"]), r.task_branch(tid)],
-              cwd=runwt, check=False)
+        commit_all(wt, t["title"])
+    res = run(["git", "merge", "--squash", r.task_branch(tid)], cwd=runwt, check=False)
     if res.returncode:
-        run(["git", "merge", "--abort"], cwd=runwt, check=False)
+        run(["git", "reset", "--hard", "HEAD"], cwd=runwt, check=False)
         add_fix(r, tid, "merge", (res.stdout + res.stderr).strip()[-1500:])
         return
+    commit_all(runwt, t["title"])
     ok, logf = True, None
     if r.cfg.get("gate"):
         logf = r.brain / "logs" / ("gate-%s.log" % tid)
@@ -1026,7 +1077,8 @@ def ensure_store(project):
         gi = project / ".gitignore"
         text = gi.read_text() if gi.exists() else ""
         if not any(line.strip() in ("/.coordinator/", ".coordinator/", "/.coordinator", ".coordinator") for line in text.splitlines()):
-            gi.write_text(text + ("" if text.endswith("\n") or not text else "\n") + "\n# Coordinator's local knowledge\n/.coordinator/\n")
+            sep = "" if not text else ("\n" if text.endswith("\n") else "\n\n")
+            gi.write_text(text + sep + "# Coordinator's local knowledge\n/.coordinator/\n")
     cfg = store / "config.json"
     if not cfg.exists():
         write_json(cfg, {"base_branch": "", "gate": "", "gate_cwd": ".", "setup": "",
@@ -1075,6 +1127,9 @@ def print_status_text(r, data):
         print("DESIGN LANGUAGE: %s" % design_line(data))
     if data.get("pr_url"):
         print("PULL REQUEST: %s" % data["pr_url"])
+    external = sorted({f for t in data["tasks"] if t.get("status") == "done" for f in (t.get("external") or [])})
+    if external:
+        print("UPDATED OUTSIDE THE REPO (not committed by coord): %s" % ", ".join(external))
     if data["status"] == "finished":
         if data.get("branch"):
             print("RUN BRANCH: %s (from %s)" % (data["branch"], data["base"]))
@@ -1363,7 +1418,8 @@ def cmd_task(a):
             print("%s [%s/%s] %s | after: %s | files: %s | %s/%s, size %s | tests %s | ui %s" % (
                 t["id"], t["type"], t["status"], t["title"], ",".join(t["depends_on"]) or "-",
                 ",".join(t["files"]) or "-", t.get("model") or "default", t.get("effort") or "default", t["size"],
-                "on" if t.get("tests") else "off", "on" if t.get("ui") else "off"))
+                "on" if t.get("tests") else "off", "on" if t.get("ui") else "off")
+                  + (" | external: %s" % ",".join(t["external"]) if t.get("external") else ""))
         print("design language: %s" % design_line(r.load()))
         return
     if act in ("add", "edit", "remove", "design") and role != "planner":
@@ -1379,6 +1435,7 @@ def cmd_task(a):
             new = new_task(a.id or next_id(d), a.title, "build", deps, [x.strip() for x in (a.files or "").split(",") if x.strip()],
                            a.size or "M", a.model or "", a.effort or "")
             new["tests"] = a.tests == "on"
+            new["external"] = [str(Path(x.strip()).expanduser()) for x in (a.external or "").split(",") if x.strip()]
             new["ui"] = a.ui == "on"
             if new["id"] in known:
                 raise Fail("%s exists" % new["id"])
@@ -1409,6 +1466,8 @@ def cmd_task(a):
                     t["depends_on"] = [x.strip() for x in a.deps.split(",") if x.strip()]
                 if a.files is not None:
                     t["files"] = [x.strip() for x in a.files.split(",") if x.strip()]
+                if a.external is not None:
+                    t["external"] = [str(Path(x.strip()).expanduser()) for x in a.external.split(",") if x.strip()]
                 msg = "updated %s" % a.target
         else:
             t = find(d, tid)
@@ -1502,6 +1561,8 @@ def cmd_hook(a):
         real = os.path.realpath(os.path.expanduser(path))
         inside = lambda x: real == os.path.realpath(x) or real.startswith(os.path.realpath(x) + os.sep)
         allowed = [rd] + ([str(Path(rd).parent)] if role in ("planner", "mapper") else []) + ([wt] if role == "builder" and wt else [])
+        if role == "builder" and t:
+            allowed += list(t.get("external") or [])
         temps = [tempfile.gettempdir(), "/tmp", "/private/tmp"]
         in_project = inside(os.environ.get("COORD_PROJECT") or str(Path(rd).parent.parent))
         if not any(inside(x) for x in allowed) and (in_project or not any(inside(x) for x in temps)):
@@ -1785,6 +1846,7 @@ def main(argv=None):
     p.add_argument("--tests", choices=["on", "off"], help="on only when the owner's words ask for tests")
     p.add_argument("--ui", choices=["on", "off"], help="on when the task designs or changes what people see")
     p.add_argument("--source", help="for `design`: the guides' paths, or the owner's words")
+    p.add_argument("--external", help="files outside the repo the project's rules require this task to update (absolute paths)")
     p.set_defaults(fn=cmd_task)
 
     p = sub.add_parser("audit", help="(officer) record a verdict")
