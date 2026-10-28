@@ -496,15 +496,26 @@ def owner_actions(r, data, scheduler_alive=None):
             add("todo-%d" % x["n"], "todo", x["text"], "when it's done: `coord todo done %d`" % x["n"], n=x["n"], task=x.get("task", ""))
     if data["status"] == "finished":
         if data.get("parent"):
-            if data.get("pr_url"):
-                add("pr", "pr", "Review and merge the pull request", data["pr_url"], url=data["pr_url"],
-                    parent=data["parent"])
+            if data.get("pr_url") and not data.get("pr_merged"):
+                top = first_run(data)
+                add("pr", "pr", "Review and merge the pull request", "%s; to merge all, run `coord merge %s` in %s" % (
+                    data["pr_url"], top["run"], top["repo"]), url=data["pr_url"], parent=data["parent"])
         else:
             prs = pull_requests(r, data)
             urls = [p["url"] for p in prs if p["url"]]
-            if urls:
-                add("pr", "pr", "Review and merge the pull request" + ("s" if len(prs) > 1 else ""), ", ".join(urls),
-                    url=data.get("pr_url") or urls[0], prs=prs)
+            if urls and not all(p["merged"] for p in prs):
+                ready, waiting_for = merge_ready(r, data, prs)
+                merge = data.get("merge") or {}
+                text = "Review and merge the pull request" + ("s" if len(prs) > 1 else "")
+                do = ", ".join(urls)
+                if ready:
+                    text = "Merge all %d pull requests and end the session?" % len(prs) if len(prs) > 1 else \
+                        "Merge the pull request and end the session?"
+                    do = "`coord merge` (merges them in order, then ends every run), or merge them yourself"
+                    if merge.get("status") == "failed":
+                        do += " (the last merge failed: %s)" % merge.get("error")
+                add("pr", "pr", text, do, url=data.get("pr_url") or urls[0], prs=prs, ready=ready,
+                    waiting_for=waiting_for, merge=merge)
         external = sorted({f for t in data["tasks"] if t.get("status") == "done" for f in (t.get("external") or [])})
         if external:
             add("external", "external", "Commit the files updated outside the repo (coord doesn't commit them)",
@@ -531,6 +542,30 @@ def pull_requests(r, data):
 
     walk(r.project, r.name, data, True)
     return out
+
+
+def first_run(data):
+    """The {repo, run} at the top of a follow-up run's parent links."""
+    top, p, seen = None, data.get("parent"), set()
+    while p and (p["repo"], p["run"]) not in seen:
+        seen.add((p["repo"], p["run"]))
+        top = p
+        p = (read_json(Path(p["repo"]) / STORE / p["run"] / "tasks.json") or {}).get("parent")
+    return top
+
+
+def merge_ready(r, data, prs=None):
+    """(ready, waiting_for) for "merge all": a first run, every family run finished with a pull request, no merge running."""
+    prs = prs if prs is not None else pull_requests(r, data)
+    waiting_for = [p["run"] for p in prs if p["status"] != "finished" or not p["url"]]
+    merge = data.get("merge") or {}
+    busy = merge.get("status") == "merging" and alive(merge.get("pid"))
+    return not data.get("parent") and not waiting_for and not busy, waiting_for
+
+
+def other_repo_env():
+    # For coord started in another repo: none of this run's agent variables
+    return {k: v for k, v in os.environ.items() if k not in ("COORD_PROJECT", "COORD_RUN_DIR", "COORD_TASK", "COORD_ROLE")}
 
 
 # ---------------------------------------------------------------- agents
@@ -1384,7 +1419,7 @@ def start_followups(r):
         for f in todo:
             f["status"] = "starting"
         words = owner_words(d)
-    env = {k: v for k, v in os.environ.items() if k not in ("COORD_PROJECT", "COORD_RUN_DIR", "COORD_TASK", "COORD_ROLE")}
+    env = other_repo_env()
     for f in todo:
         try:
             name, n = f["name"], 2
@@ -1696,6 +1731,111 @@ def cmd_terminate(a):
         lines.append("Kept the knowledge in %s for later coordinators." % r.dir)
     write_catalog(r.project)
     print("\n".join(lines))
+
+
+def merge_pr(p):
+    """Merge one pull request as a single squashed commit: its title, no body. Returns the step's result."""
+    view = run(["gh", "pr", "view", p["url"], "--json", "state,isDraft,title"], cwd=p["repo"], check=False)
+    if view.returncode:
+        raise Fail((view.stderr or view.stdout).strip()[-300:] or "gh pr view failed")
+    pr = json.loads(view.stdout)
+    if pr.get("state") == "MERGED":
+        return "already merged"
+    if pr.get("state") == "CLOSED":
+        raise Fail("the pull request is closed")
+    if pr.get("isDraft"):
+        run(["gh", "pr", "ready", p["url"]], cwd=p["repo"])
+    run(["gh", "pr", "merge", p["url"], "--squash", "--subject", pr.get("title") or p["run"], "--body", ""], cwd=p["repo"])
+    return "merged"
+
+
+def cmd_merge(a):
+    r = pick_run(a.run)
+    try:
+        merge_all(r)
+    except Exception as e:
+        # Started from the live page, the record says "merging" before these checks run: leave the reason there
+        error = str(e).strip() or repr(e)
+        with r.edit() as d:
+            m = d.get("merge") or {}
+            if m.get("status") == "merging" and m.get("pid") == os.getpid():
+                m.update(status="failed", error=error)
+        raise e if isinstance(e, Fail) else Fail(error)
+
+
+def merge_all(r):
+    data = r.load()
+    if data.get("parent"):
+        top = first_run(data)
+        raise Fail("%s is a follow-up run; merge all from its first run: `coord merge %s` in %s" % (r.name, top["run"], top["repo"]))
+    prs = pull_requests(r, data)
+    waiting = [p for p in prs if p["status"] != "finished" or not p["url"]]
+    if waiting:
+        raise Fail("every run must be finished with a pull request first; not yet: %s" % ", ".join(
+            "%s in %s (%s)" % (p["run"], p["repo_name"], p["status"] if p["status"] != "finished" else "no pull request")
+            for p in waiting))
+    if not shutil.which("gh"):
+        raise Fail("gh is not on PATH")
+    with r.edit() as d:
+        m = d.get("merge") or {}
+        if m.get("status") == "merging" and m.get("pid") != os.getpid() and alive(m.get("pid")):
+            raise Fail("a merge is already running (pid %s)" % m["pid"])
+        d["merge"] = {"status": "merging", "pid": os.getpid(), "error": "", "steps": []}
+    lines = []
+    for p in prs:
+        try:
+            result = merge_pr(p)
+        except Exception as e:
+            error = str(e)
+            with r.edit() as d:
+                d["merge"]["steps"].append(dict(run=p["run"], repo_name=p["repo_name"], url=p["url"], result="failed: " + error))
+                d["merge"].update(status="failed", error=error)
+            print("\n".join(lines + ["failed · %s · %s · %s" % (p["repo_name"], p["run"], p["url"])]))
+            raise Fail("merging %s failed, nothing was ended; fix it and run `coord merge %s` again: %s" % (p["url"], r.name, error))
+        if not p["merged"]:
+            with Run(p["repo"], p["run"]).edit() as d:
+                d["pr_merged"] = now()
+        with r.edit() as d:
+            d["merge"]["steps"].append(dict(run=p["run"], repo_name=p["repo_name"], url=p["url"], result=result))
+        lines.append("%s · %s · %s · %s" % (result, p["repo_name"], p["run"], p["url"]))
+    with r.edit() as d:
+        d["merge"]["status"] = "done"
+    print("\n".join(lines))
+    # Deepest first, the first run last: ending it stops its live page, and its worktree may hold this very file
+    failed = []
+    for p in reversed(prs):
+        try:
+            res = subprocess.run([sys.executable, str(ROOT / "bin" / "coord"), "terminate", p["run"]], cwd=p["repo"],
+                                 env=other_repo_env(), text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=300)
+        except subprocess.TimeoutExpired:
+            failed.append(p["run"])
+            print("terminate %s in %s timed out" % (p["run"], p["repo_name"]))
+            continue
+        print((res.stdout or "").strip() or "terminate %s in %s printed nothing" % (p["run"], p["repo_name"]))
+        if res.returncode:
+            failed.append(p["run"])
+            print((res.stderr or "").strip(), file=sys.stderr)
+    if failed:
+        raise Fail("all pull requests are merged, but these runs did not end: %s; run `coord terminate <run>` in their repos"
+                   % ", ".join(failed))
+
+
+def start_merge(r):
+    """The live page's Approve: `coord merge` in its own session, so it outlives this page's server."""
+    with r.edit() as d:
+        ready, waiting_for = merge_ready(r, d)
+        if (d.get("merge") or {}).get("status") == "merging" and alive(d["merge"].get("pid")):
+            raise Fail("a merge is already running")
+        if not ready:
+            raise Fail("not ready to merge all" + (": waiting for %s" % ", ".join(waiting_for) if waiting_for else ""))
+        if not shutil.which("gh"):
+            raise Fail("gh is not on PATH")
+        (r.brain / "logs").mkdir(parents=True, exist_ok=True)
+        with open(r.brain / "logs" / "merge.out", "a") as log:
+            p = subprocess.Popen([sys.executable, str(ROOT / "bin" / "coord"), "merge", r.name], cwd=str(r.project),
+                                 env=other_repo_env(), stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                 start_new_session=True)
+        d["merge"] = {"status": "merging", "pid": p.pid, "error": "", "steps": []}
 
 
 # ---------------------------------------------------------------- agent commands
@@ -2216,6 +2356,8 @@ def cmd_viewer(a):
                     do_resume(r)
                 elif act == "/api/todo":
                     do_todo_done(r, int(body["n"]))
+                elif act == "/api/merge":
+                    start_merge(r)
                 else:
                     return self.send(404, "{}")
                 self.send(200, json.dumps({"ok": True}))
@@ -2425,6 +2567,10 @@ def main(argv=None):
     p.add_argument("run", nargs="?")
     p.add_argument("--purge", action="store_true", help="also delete its knowledge folder in the project")
     p.set_defaults(fn=cmd_terminate)
+
+    p = sub.add_parser("merge", help="merge every pull request of a run and its follow-up runs, then end them all")
+    p.add_argument("run", nargs="?")
+    p.set_defaults(fn=cmd_merge)
 
     p = sub.add_parser("task", help="(agents) update your own task")
     p.add_argument("action", choices=["show", "list", "start", "review", "done", "ask", "note", "add", "edit", "remove", "design",
