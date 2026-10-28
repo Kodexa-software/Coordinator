@@ -463,6 +463,46 @@ def summary(data, scheduler_alive=None):
     return " · ".join(parts)
 
 
+def owner_actions(r, data, scheduler_alive=None):
+    """Everything waiting on the owner, in order. One list for the live page and the chat."""
+    if scheduler_alive is None:
+        scheduler_alive = alive(r.state().get("scheduler_pid"))
+    out = []
+    add = lambda key, kind, text, do, **kw: out.append(dict(key=key, kind=kind, text=text, do=do, **kw))
+    asks = [t for t in data["tasks"] if t["status"] == "waiting_on_you"]
+    if not data.get("plan_approved") and data["status"] == "waiting_on_you" and not asks:
+        add("plan", "plan", "The plan is ready for your approval", "approve it (`coord approve`) or say what to change")
+    for t in asks:
+        qk = t.get("question_kind") or "agent"
+        do = {"officer": "`coord accept %s`, or `coord answer %s \"<what to change>\"`" % (t["id"], t["id"]),
+              "stalled": "`coord retry %s`, `coord stop %s`, or `coord answer %s \"<guidance>\"`" % ((t["id"],) * 3)}
+        add("q-" + t["id"], "question", t.get("question") or "", do.get(qk, "`coord answer %s \"<answer>\"`" % t["id"]),
+            task=t["id"], title=t["title"], question_kind=qk)
+    if scheduler_alive is False and data["status"] in ("running", "planning"):
+        add("scheduler", "scheduler", "The scheduler stopped while the run was %s" % data["status"], "`coord resume`")
+    for f in data.get("followups") or []:
+        repo = Path(f["repo"]).name
+        if f.get("status") == "failed":
+            add("fu-" + f["repo"], "followup", "The follow-up run in %s failed to start: %s" % (repo, f.get("error")),
+                "start it yourself from that repo with /coordinate", repo=f["repo"], failed=True)
+        elif f.get("status") == "started":
+            fu = read_json(Path(f["repo"]) / STORE / f["run"] / "tasks.json")
+            if fu and not fu.get("plan_approved"):
+                add("fu-" + f["repo"], "followup", "Approve the plan of the follow-up run %s in %s" % (f["run"], repo),
+                    f.get("url") or "`coord status %s` in that repo" % f["run"], repo=f["repo"], url=f.get("url") or "")
+    for x in data.get("todos") or []:
+        if not x.get("done"):
+            add("todo-%d" % x["n"], "todo", x["text"], "when it's done: `coord todo done %d`" % x["n"], n=x["n"], task=x.get("task", ""))
+    if data["status"] == "finished":
+        if data.get("pr_url"):
+            add("pr", "pr", "Review and merge the pull request", data["pr_url"], url=data["pr_url"])
+        external = sorted({f for t in data["tasks"] if t.get("status") == "done" for f in (t.get("external") or [])})
+        if external:
+            add("external", "external", "Commit the files updated outside the repo (coord doesn't commit them)",
+                ", ".join(external), files=external)
+    return out
+
+
 # ---------------------------------------------------------------- agents
 
 def role_of(t):
@@ -1175,9 +1215,13 @@ def print_status_text(r, data):
     url = viewer_url(r)
     if url:
         print("live page: %s" % url)
-    for t in data["tasks"]:
-        if t["status"] == "waiting_on_you":
-            print("QUESTION %s (%s): %s" % (t["id"], t.get("question_kind") or "agent", t.get("question")))
+    acts = owner_actions(r, data)
+    if acts:
+        print("WAITING ON YOU:")
+        for i, x in enumerate(acts, 1):
+            who = "%s (%s) asks: " % (x["task"], x["question_kind"]) if x["kind"] == "question" else \
+                "%s: " % x["task"] if x.get("task") else ""
+            print("  %d. %s%s - %s" % (i, who, x["text"], x["do"]))
     if not data.get("plan_approved") and data["status"] == "waiting_on_you":
         plan = r.dir / "plan.md"
         print("PLAN READY: %s" % plan)
@@ -1204,10 +1248,11 @@ def print_status_text(r, data):
             print("FOLLOW-UP %s: %s" % (f.get("run") or f["name"], followup_line(data, f)))
     if (data.get("design") or {}).get("choice"):
         print("DESIGN LANGUAGE: %s" % design_line(data))
-    if data.get("pr_url"):
+    # Once finished, the pull request and the outside files are in the list above.
+    if data.get("pr_url") and data["status"] != "finished":
         print("PULL REQUEST: %s" % data["pr_url"])
     external = sorted({f for t in data["tasks"] if t.get("status") == "done" for f in (t.get("external") or [])})
-    if external:
+    if external and data["status"] != "finished":
         print("UPDATED OUTSIDE THE REPO (not committed by coord): %s" % ", ".join(external))
     if data["status"] == "finished":
         if data.get("branch"):
@@ -1219,15 +1264,18 @@ def print_status_text(r, data):
 
 def cmd_wait(a):
     r = pick_run(a.run)
+    # Also return when something new waits on the owner (a manual step, a follow-up run), not only on a status change.
+    # The scheduler's own item is left to the check below, which waits out a restart.
+    keys = lambda d: {x["key"] for x in owner_actions(r, d, True)}
+    seen = keys(r.load())
     while True:
         data = r.load()
-        if data["status"] in WAIT_STATES:
+        if data["status"] in WAIT_STATES or keys(data) - seen:
             break
         if not alive(r.state().get("scheduler_pid")):
             time.sleep(3)
             if not alive(r.state().get("scheduler_pid")) and r.load()["status"] not in WAIT_STATES:
-                print("the scheduler stopped while the run was %s; `coord resume` restarts it" % r.load()["status"])
-                return
+                break
         time.sleep(4)
     print_status_text(r, r.load())
 
@@ -1344,6 +1392,30 @@ def do_accept(r, tid):
         d["status"] = derive_status(d)
     r.poke()
     start_daemon(r, "scheduler")
+
+
+def do_todo_done(r, n):
+    with r.edit() as d:
+        x = next((x for x in d.get("todos") or [] if x["n"] == n), None)
+        if not x:
+            raise Fail("no manual step %s" % n)
+        x.update(done=True, done_at=now())
+    r.poke()
+
+
+def cmd_todo(a):
+    r = pick_run(a.run)
+    if a.action == "done":
+        if a.n is None:
+            raise Fail("say which: coord todo done <n>")
+        do_todo_done(r, a.n)
+        print("marked %d done" % a.n)
+        return
+    todos = r.load().get("todos") or []
+    for x in todos:
+        print("%d. [%s] %s%s" % (x["n"], "done" if x.get("done") else "to do", "%s: " % x["task"] if x.get("task") else "", x["text"]))
+    if not todos:
+        print("no manual steps recorded")
 
 
 def do_pause(r):
@@ -1707,9 +1779,16 @@ def cmd_task(a):
                 (r.task_dir(tid) / "resume.md").write_text("# Resume note (%s)\n\n%s\n" % (now()[:16], " ".join(a.text)))
                 t["status"] = "paused"
                 msg = "note saved. End your turn now."
+            elif act == "todo":
+                todos = d.setdefault("todos", [])
+                n = max([x["n"] for x in todos] or [0]) + 1
+                todos.append({"n": n, "task": tid, "text": " ".join(a.text), "at": now(), "done": False})
+                msg = "recorded for the owner (step %d). Carry on with your work." % n
     r.poke()
     if act == "ask":
         notify("coord · %s" % r.name, "%s asks: %s" % (tid, " ".join(a.text))[:200])
+    if act == "todo":
+        notify("coord · %s" % r.name, "%s: for you to do: %s" % (tid, " ".join(a.text))[:200])
     print(msg)
 
 
@@ -1954,6 +2033,7 @@ def view_state(r):
     data["plan_audits"] = sorted(p.name for p in r.dir.glob("plan-audit-*.md"))
     data["scheduler_alive"] = alive(st.get("scheduler_pid"))
     data["agents"] = st.get("agents") or {}
+    data["waiting"] = owner_actions(r, data, data["scheduler_alive"])
     data["summary"] = summary(data, data["scheduler_alive"])
     data["now"] = now()
     data["project"] = r.project.name
@@ -2084,10 +2164,12 @@ def cmd_viewer(a):
                     do_pause(r)
                 elif act == "/api/resume":
                     do_resume(r)
+                elif act == "/api/todo":
+                    do_todo_done(r, int(body["n"]))
                 else:
                     return self.send(404, "{}")
                 self.send(200, json.dumps({"ok": True}))
-            except (Fail, KeyError) as e:
+            except (Fail, KeyError, ValueError, TypeError) as e:
                 self.send(400, json.dumps({"error": str(e)}))
 
     def stop(*_):
@@ -2262,6 +2344,12 @@ def main(argv=None):
         p.add_argument("--run")
         p.set_defaults(fn=cmd_simple)
 
+    p = sub.add_parser("todo", help="steps only you can do, recorded by agents; `todo done <n>` marks one done")
+    p.add_argument("action", nargs="?", choices=["done"])
+    p.add_argument("n", nargs="?", type=int)
+    p.add_argument("--run")
+    p.set_defaults(fn=cmd_todo)
+
     p = sub.add_parser("add", help="change the plan or add work; it goes back through the officer and you")
     p.add_argument("text", nargs="+")
     p.add_argument("--run")
@@ -2290,7 +2378,7 @@ def main(argv=None):
 
     p = sub.add_parser("task", help="(agents) update your own task")
     p.add_argument("action", choices=["show", "list", "start", "review", "done", "ask", "note", "add", "edit", "remove", "design",
-                                       "followup"])
+                                       "followup", "todo"])
     p.add_argument("target", nargs="?")
     p.add_argument("text", nargs="*")
     p.add_argument("--id")
@@ -2328,7 +2416,7 @@ def main(argv=None):
     a, extra = ap.parse_known_args(argv)
     if extra and not (a.cmd == "task" and a.action == "followup"):
         ap.error("unrecognized arguments: %s" % " ".join(extra))
-    if a.cmd == "task" and a.action in ("ask", "note", "followup"):
+    if a.cmd == "task" and a.action in ("ask", "note", "followup", "todo"):
         a.text = ([a.target] if a.target else []) + a.text + extra
         if not a.text and a.action != "followup":
             ap.error("say what: coord task %s \"...\"" % a.action)

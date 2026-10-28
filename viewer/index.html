@@ -126,9 +126,22 @@ main{max-width:1500px;margin:0 auto;padding:22px 24px 72px}
 .fade{animation:co-fade var(--co-dur-base) var(--co-ease-arrive)}
 .empty{color:var(--co-muted);font-size:var(--co-text-xs)}
 
-/* Attention */
-.attention{display:grid;gap:12px;margin-bottom:24px}
-.attention:empty{display:none}
+/* Waiting on you: one list of what only the owner can do. It eases open, and folds away once empty. */
+.alerts{display:grid;gap:12px}
+.alerts:not(:empty){margin-bottom:16px}
+.w-in{padding-bottom:28px}
+.w-title{display:flex;align-items:center;gap:8px;margin:0 0 12px;font-size:var(--co-text-base);font-weight:var(--co-weight-strong);letter-spacing:-0.01em}
+.w-title:focus{outline:none}
+.attention{display:grid;gap:12px}
+.w-kind{display:inline-block;margin:0 0 8px;padding:1px 7px;border-radius:var(--co-radius-sm);background:var(--co-warn-soft);color:var(--co-warn);
+  font-size:0.75rem;font-weight:600;line-height:1.5}
+.notice.bad .w-kind{background:var(--co-bad-soft);color:var(--co-bad)}
+.notice .w-kind+h3{margin-top:0}
+.w-files{margin:0 0 4px;padding-left:18px;color:var(--co-ink-2)}
+.w-files li{margin:3px 0;overflow-wrap:anywhere}
+.btn.waits{background:var(--co-warn-soft);border-color:transparent;color:var(--co-warn);animation:co-up var(--co-dur-page) var(--co-ease-arrive)}
+.btn.waits:hover{border-color:var(--co-warn)}
+.w-n{font-variant-numeric:tabular-nums}
 .notice{position:relative;overflow:hidden;padding:16px 18px 16px 21px}
 .notice::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--co-warn)}
 .notice.bad::before{background:var(--co-bad)}
@@ -373,7 +386,7 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
 /* Reduced motion: no keyframed movement, short fades at most */
 @media (prefers-reduced-motion:reduce){
   .brand .co-row1,.brand .co-row2,.brand .co-row3{animation:none}
-  .title,.enter,.view-in,.btn.pr,.pc-sec,.settle-in{animation-name:co-fade}
+  .title,.enter,.view-in,.btn.pr,.btn.waits,.pc-sec,.settle-in{animation-name:co-fade}
   .task:hover,.btn:active{transform:none}
   .btn.pr:hover svg{transform:none}
   .tabs.ready::after{transition:none}
@@ -402,6 +415,7 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
     </div>
     <div class="actions">
       <span class="pill" id="status">…</span>
+      <button class="btn waits" id="w-jump" hidden><span class="w-n" id="w-n">0</span> waiting on you</button>
       <a class="btn pr" id="pr" target="_blank" rel="noopener" hidden aria-label="Pull request (opens in a new tab)">Pull request
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M5 11 11 5M6 5h5v5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
       <button class="btn" id="pause" hidden>Pause</button>
@@ -411,8 +425,14 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
   <div class="progress"><div id="progress"></div></div>
 </header>
 <main>
+  <div class="alerts" id="alerts"></div>
+  <section class="waiting" id="waiting" aria-labelledby="w-title" hidden>
+    <div class="w-in">
+      <h2 class="w-title" id="w-title" tabindex="-1">Waiting on you <span class="count" id="w-count">0</span></h2>
+      <div class="attention" id="attention"></div>
+    </div>
+  </section>
   <div class="stats" id="stats"></div>
-  <div class="attention" id="attention"></div>
   <div class="tabs" id="tabs" role="tablist">
     <button data-tab="board" class="on" role="tab" aria-selected="true">Tasks</button>
     <button data-tab="plan" role="tab" aria-selected="false">Plan</button>
@@ -494,9 +514,10 @@ function setHTML(el, html){ if(el._html !== html){ el.innerHTML = html; el._html
 function replay(el, cls){ el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); }
 
 // Keyed lists: items [{key, parent, cls, html, attrs}] in order. New items enter, gone items fade out,
-// and items that moved (for example between board columns) glide from their old place.
+// and items that moved (for example between board columns) glide from their old place. `gone(el)` takes an item
+// once it has faded; by default it is removed.
 const pools = {};
-function sync(name, items){
+function sync(name, items, gone){
   const pool = pools[name] ||= new Map(), motion = !reduce.matches, before = new Map(), keep = new Set(), at = new Map();
   if(motion) pool.forEach((el,k)=>before.set(k, el.getBoundingClientRect()));
   let fresh = 0;
@@ -515,16 +536,16 @@ function sync(name, items){
     at.set(it.parent, i+1);
     if(kids[i] !== el) it.parent.insertBefore(el, kids[i] || null);
   });
-  pool.forEach((el,k)=>{ if(!keep.has(k)){ pool.delete(k); leave(el); } });
+  pool.forEach((el,k)=>{ if(!keep.has(k)){ pool.delete(k); leave(el, gone); } });
   if(motion) pool.forEach((el,k)=>{
     const a = before.get(k); if(!a || !a.width) return;
     const b = el.getBoundingClientRect(), dx = a.left-b.left, dy = a.top-b.top;
     if(Math.abs(dx)+Math.abs(dy) > 1) el.animate([{transform:`translate(${dx}px,${dy}px)`},{transform:"none"}],{duration:ms("--co-dur-page"),easing:token("--co-ease-move")});
   });
 }
-function leave(el){
+function leave(el, gone){
   el._leaving = true;
-  el.animate([{opacity:1},{opacity:0,transform:reduce.matches?"none":"translateY(-4px)"}],{duration:ms("--co-dur-quick"),easing:token("--co-ease-leave"),fill:"forwards"}).onfinish = () => el.remove();
+  el.animate([{opacity:1},{opacity:0,transform:reduce.matches?"none":"translateY(-4px)"}],{duration:ms("--co-dur-quick"),easing:token("--co-ease-leave"),fill:"forwards"}).onfinish = () => gone ? gone(el) : el.remove();
 }
 // The tab underline slides to the selected tab.
 function placeBar(tabs, instant){
@@ -538,7 +559,7 @@ async function api(path, body){
   const r = await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})});
   const j = await r.json().catch(()=>({})); if(!r.ok) alertBox(j.error||"failed"); await refresh();
 }
-function alertBox(msg){ const n = document.createElement("div"); n.className="card notice bad enter"; n.setAttribute("role","alert"); n.textContent=msg; $("#attention").prepend(n); setTimeout(()=>leave(n),6000); }
+function alertBox(msg){ const n = document.createElement("div"); n.className="card notice bad enter"; n.setAttribute("role","alert"); n.textContent=msg; $("#alerts").prepend(n); setTimeout(()=>leave(n),6000); }
 async function text(task, name){ const r = await fetch(`/api/file?${task?"task="+encodeURIComponent(task)+"&":""}name=${encodeURIComponent(name)}`); return r.ok ? r.text() : ""; }
 
 function waves(tasks){
@@ -561,7 +582,7 @@ function card(t, a){
 
 // The plan's short version, read from plan.md: goal, order, what this run leaves out, and each question to settle.
 let planSrc = "", planQs = [], planPick = {}, planComment = "";
-const planReady = (s) => !s.plan_approved && s.status==="waiting_on_you" && !s.tasks.some((t)=>t.status==="waiting_on_you");
+const planReady = (s) => (s.waiting||[]).some((w)=>w.kind==="plan");
 const isNone = (l) => /^\(?none\.?\)?$/i.test(l.trim());
 function planSection(src, name){
   const out = []; let on = false;
@@ -665,16 +686,44 @@ async function sendPlan(b){
   try{ await api("/api/approve", {answers, comment:planComment.trim()}); } finally { b.disabled = false; }
 }
 
+// Each thing waiting on the owner (s.waiting, the same list `coord wait` prints) with its action in place.
+const KIND = {plan:"Plan", question:"Question", officer:"Officer stalemate", stalled:"Stalled", scheduler:"Scheduler",
+              followup:"Follow-up run", todo:"Manual step", pr:"Pull request", external:"Outside the repo"};
+const OUT = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M5 11 11 5M6 5h5v5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+function waitItem(s, w){
+  const kind = w.kind==="question" && w.question_kind!=="agent" ? w.question_kind : w.kind;
+  const tag = `<span class="w-kind">${KIND[kind]||esc(kind)}${w.task?" · "+esc(w.task):""}</span>`;
+  const link = (label) => `<div class="row"><a class="btn primary" href="${esc(w.url)}" target="_blank" rel="noopener" aria-label="${label} (opens in a new tab)">${label} ${OUT}</a></div>`;
+  if(w.kind==="plan") return {cls:"card notice plan-card", html:tag+planCard(s)};
+  if(w.kind==="question"){ const t = s.tasks.find((x)=>x.id===w.task) || {};
+    return {cls:"card notice", html:tag+`<h3>${esc(w.title)}</h3><p>${esc(w.text)}</p><textarea data-answer="${esc(w.task)}" placeholder="Your answer…" aria-label="Your answer to ${esc(w.task)}"></textarea>
+     <div class="row"><button class="btn primary" data-act="answer" data-task="${esc(w.task)}">Send answer</button>${w.question_kind==="officer"||t.type==="plan"?`<button class="btn" data-act="accept" data-task="${esc(w.task)}">Accept as it is</button>`:""}</div>`}; }
+  if(w.kind==="scheduler") return {cls:"card notice bad", html:tag+`<h3>The scheduler is not running</h3><p>Nothing is being worked on. Resume to pick up where it stopped.</p><div class="row"><button class="btn primary" data-act="resume">Resume</button></div>`};
+  if(w.kind==="followup") return w.url ? {cls:"card notice", html:tag+`<h3>${esc(w.text)}</h3><p>It plans in its own repo and waits for you there.</p>${link("Open its live page")}`}
+    : {cls:"card notice"+(w.failed?" bad":""), html:tag+`<h3>${esc(w.text)}</h3><p>${w.failed?"Start it yourself from that repo with <code>/coordinate</code>.":inline(esc(w.do))}</p>`};
+  if(w.kind==="todo") return {cls:"card notice", html:tag+`<p>${inline(esc(w.text))}</p><div class="row"><button class="btn primary" data-act="todo" data-n="${esc(w.n)}">Mark done</button></div>`};
+  if(w.kind==="pr") return {cls:"card notice", html:tag+`<h3>${esc(w.text)}</h3><p>The run is finished.</p>${link("Open the pull request")}`};
+  if(w.kind==="external") return {cls:"card notice", html:tag+`<h3>Commit the files updated outside the repo</h3><p>Coordinator doesn't commit them.</p><ul class="w-files">${(w.files||[]).map((f)=>`<li><code>${esc(f)}</code></li>`).join("")}</ul>`};
+  return {cls:"card notice", html:tag+`<p>${esc(w.text)}</p>`};
+}
+// The panel eases between heights as items come and go, so the page below glides instead of jumping.
+function fit(change){
+  const box = $("#waiting"), from = box.hidden ? 0 : box.getBoundingClientRect().height, was = box._fit;
+  box._fit = null; if(was) was.cancel();
+  change();
+  const show = $("#attention").childElementCount > 0;
+  box.hidden = false; box.style.overflow = "";
+  const to = show ? box.getBoundingClientRect().height : 0;
+  if(reduce.matches || Math.abs(to-from) < 1){ box.hidden = !show; return; }
+  box.style.overflow = "hidden";
+  const a = box._fit = box.animate([{height:from+"px", opacity:from?1:0},{height:to+"px", opacity:to?1:0}],
+    {duration:ms("--co-dur-base"), easing:token(from?"--co-ease-move":"--co-ease-arrive")});
+  a.onfinish = () => { if(box._fit!==a) return; box._fit = null; box.style.overflow = ""; box.hidden = !show; };
+}
 function renderAttention(s){
-  const items = [];
-  if(planReady(s)) items.push({key:"plan", cls:"card notice plan-card", html:planCard(s)});
-  else { planPick = {}; planComment = ""; }
-  s.tasks.filter((t)=>t.status==="waiting_on_you").forEach((t)=>items.push({key:"q-"+t.id, cls:"card notice", html:
-    `<h3><span class="id">${esc(t.id)}</span>${esc(t.title)}</h3><p>${esc(t.question)}</p><textarea data-answer="${esc(t.id)}" placeholder="Your answer…" aria-label="Your answer to ${esc(t.id)}"></textarea>
-     <div class="row"><button class="btn primary" data-act="answer" data-task="${esc(t.id)}">Send answer</button>${t.question_kind==="officer"||t.type==="plan"?`<button class="btn" data-act="accept" data-task="${esc(t.id)}">Accept as it is</button>`:""}</div>`}));
-  if(!s.scheduler_alive && ["running","planning"].includes(s.status))
-    items.push({key:"down", cls:"card notice bad", html:`<h3>The scheduler is not running</h3><p>Nothing is being worked on. Resume to pick up where it stopped.</p><div class="row"><button class="btn primary" data-act="resume">Resume</button></div>`});
-  const parent = $("#attention"); sync("attention", items.map((it)=>({...it, parent})));
+  if(!planReady(s)){ planPick = {}; planComment = ""; }
+  const parent = $("#attention");
+  fit(()=>sync("attention", (s.waiting||[]).map((w)=>({key:w.key, parent, ...waitItem(s, w)})), (el)=>fit(()=>el.remove())));
   const pc = pools.attention.get("plan"); if(pc && pc._applied!==pc._html){ pc._applied = pc._html; applyPlan(pc); }
 }
 
@@ -691,7 +740,10 @@ function renderBoard(s){
 }
 
 function render(s){
-  state = s; document.title = `${s.name} · Coordinator`;
+  const n = (s.waiting||[]).length;
+  state = s; document.title = `${n?`(${n}) `:""}${s.name} · Coordinator`;
+  const wn = $("#w-n"); $("#w-jump").hidden = !n; $("#w-count").textContent = n;
+  if(wn.textContent !== String(n)){ wn.textContent = n; replay(wn, "flash"); }
   $("#name").textContent = s.name;
   setHTML($("#sub"), `${esc(s.project)} · ${s.mode==="plan"?"plan only":`run branch <code>${esc(s.branch)}</code>`} · from <code>${esc(s.base)}</code>`);
   const pr = $("#pr"); pr.hidden = !s.pr_url; if(s.pr_url && pr.getAttribute("href")!==s.pr_url) pr.setAttribute("href", s.pr_url);
@@ -922,13 +974,14 @@ function showTab(tab){
 }
 
 document.addEventListener("click", async (e)=>{
-  const b = e.target.closest("[data-path],[data-view],#v-close,#v-back,[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],[data-settle],[data-unsettle],#d-close,#pause,#resume");
+  const b = e.target.closest("[data-path],[data-view],#v-close,#v-back,#w-jump,[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],[data-settle],[data-unsettle],#d-close,#pause,#resume");
   if(!b) return;
   if(b.id==="v-close" || b.id==="v-back") return closeViewer();
   if(b.dataset.path) return openViewer(b.dataset.path);
   if(b.dataset.view) return openViewer(b.dataset.view, true);
   if(b.id==="pause") return api("/api/pause"); if(b.id==="resume") return api("/api/resume");
   if(b.id==="d-close") return closeDrawer();
+  if(b.id==="w-jump"){ scrollTo({top:0, behavior:reduce.matches?"auto":"smooth"}); return $("#w-title").focus({preventScroll:true}); }
   if(b.dataset.settle || b.dataset.unsettle) return settle(b.dataset.settle || b.dataset.unsettle, !!b.dataset.settle);
   if(b.dataset.file){ if(b.dataset.file===drawerFile) return; drawerFile = b.dataset.file; const t = state.tasks.find((x)=>x.id===drawer);
     drawerTabs(t ? tabsFor(t) : []); return showFile(drawer); }
@@ -941,6 +994,7 @@ document.addEventListener("click", async (e)=>{
   if(act==="approve-plan" || act==="send-plan") return sendPlan(b);
   if(act==="resume") return api("/api/resume");
   if(act==="accept") return api("/api/accept",{task:b.dataset.task});
+  if(act==="todo"){ b.disabled = true; try{ await api("/api/todo",{n:+b.dataset.n}); } finally { b.disabled = false; } return; }
   if(act==="answer"){ const ta = document.querySelector(`textarea[data-answer="${CSS.escape(b.dataset.task)}"]`); if(!ta.value.trim()) return ta.focus();
     typing=false; return api("/api/answer",{task:b.dataset.task,text:ta.value.trim()}); }
 });
