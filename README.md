@@ -3,13 +3,15 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.2.0-c9a45c?style=flat-square">
+  <img alt="version" src="https://img.shields.io/badge/version-0.3.0-c9a45c?style=flat-square">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-1d2033?style=flat-square">
   <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-1d2033?style=flat-square">
   <img alt="scheduling" src="https://img.shields.io/badge/scheduling-zero%20tokens-c9a45c?style=flat-square">
 </p>
 
 <p align="center"><em>One request in. A planned, audited, reviewed branch out.</em></p>
+
+<p align="center"><a href="https://coordinator.kodexa.workers.dev"><strong>coordinator.kodexa.workers.dev</strong></a></p>
 
 ---
 
@@ -48,29 +50,30 @@ flowchart LR
 4. **Build in parallel.** Tasks that don't depend on each other and don't share files run at the same time, each
    in its own worktree. Each builder runs its own reviewer and fixes what it finds.
 5. **Audit and merge.** The officer checks each finished task against the plan and your words, without reading
-   the code. The scheduler then commits, merges into the run branch and runs your gate. A conflict or a failing
-   gate becomes a small fix task of its own.
+   the code. The scheduler then commits, merges into the run branch, runs your gate and pushes. A conflict or a
+   failing gate becomes a small fix task of its own. A draft pull request shows your full request, the plan and
+   every task, and is updated after each merge, so you can watch the changes land on GitHub.
 
 ## Install
 
 **As a Claude Code plugin**
 
 ```text
-/plugin marketplace add kodo-yousif/Coordinator
+/plugin marketplace add Kodexa-software/Coordinator
 /plugin install coordinator@coordinator
 ```
 
 **From source**, so that `git pull` updates it:
 
 ```sh
-git clone https://github.com/kodo-yousif/Coordinator.git
+git clone https://github.com/Kodexa-software/Coordinator.git
 cd Coordinator && ./install.sh
 ```
 
 This links `coord` into `~/.local/bin` and `/coordinate` into `~/.claude/skills`.
 
-**Needs:** a recent Claude Code CLI (`claude`), Python 3.9+, and git. Before/after screenshots also need Node.js;
-Playwright is fetched on first use.
+**Needs:** a recent Claude Code CLI (`claude`), Python 3.9+, and git. The live pull request uses the GitHub CLI
+(`gh`). Before/after screenshots also need Node.js; Playwright is fetched on first use.
 
 ## Use
 
@@ -95,10 +98,11 @@ few words are enough:
 | `/coordinate pause` / `resume` | Agents write an exact next step and stop / pick up where they stopped |
 | `/coordinate run` | Build a plan-only run, today or weeks later |
 | `/coordinate shots [note]` | Before/after screenshots (base branch vs run branch) as one PNG on your Desktop |
+| `/coordinate map [areas]` | Build or refresh the project map in `.coordinator/map/`, which planners read before the code |
 | `/coordinate accept T3` / `retry T3` / `stop T3` | Settle a task the officer keeps sending back / start it fresh / skip it |
 | `/coordinate terminate` | End the run: stop every process, remove worktrees and internal files, keep the branch and the knowledge |
 
-Every command also works in a terminal as `coord <command>`, with no model involved.
+With the from-source install, every command also works in a terminal as `coord <command>`, with no model involved.
 
 ## The live page
 
@@ -115,10 +119,11 @@ questions there too. It runs on `127.0.0.1` only, reads the run's files, and cos
 | Project settings | `<project>/.coordinator/config.json` | kept |
 | The run's knowledge: `plan.md`, `tasks.json`, and per task `knowledge.md`, `changes.md`, `review.md`, officer reports | `<project>/.coordinator/<run>/` | kept, so a later run can continue |
 | Processes, logs, worktrees | `~/.coordinator/runs/<run>/` | removed |
-| Run branch | `coord/<run>` | kept |
+| Run branch | `coord/<run>`, pushed after every merged task, with a draft PR | kept |
 | Task branches | `coord-tasks/<run>/<task>` | removed |
 
-`.coordinator/` is added to the repository's local `.git/info/exclude`, so it is never committed by accident.
+`.coordinator/` is added to the project's `.gitignore` (and its local `.git/info/exclude`), so it is never committed by
+accident. Set `"gitignore": false` to keep your `.gitignore` untouched.
 
 ## Configuration
 
@@ -137,8 +142,21 @@ haven't.
 | `permission_mode` | `"auto"` | Permission mode for background agents |
 | `deny` | push, commit, rebase, `reset --hard`, `gh pr`, publish, `sudo`, ... | Commands agents may never run |
 | `test_names` / `test_dirs` | common test file and folder patterns | What counts as a test file for the tests guard |
-| `push` / `pr` | `false` | Push the run branch and keep a draft PR's description up to date |
+| `gitignore` | `true` | Add `.coordinator/` to the project's `.gitignore` when it isn't there |
+| `push` / `pr` | `true` | Push the run branch after every merged task, and keep a draft PR with the request, the plan and the tasks up to date |
 | `base_branch` | the current branch | What the run branch starts from |
+
+## Design languages and the project map
+
+- **Design language, your choice.** When a request involves UI, the planner asks which design language to follow:
+  your project's own, Impeccable's (bundled), or another you name. The answer goes to every UI task, its
+  reviewer checks against it, and the officer checks the plan sticks to one.
+- **A map of your project.** `/coordinate map` builds a small, cited map of the code in `.coordinator/map/`, using
+  the System map method of Interpretable Context Methodology. Planners read it first instead of exploring the
+  repository on every run, and the officer checks it before it counts.
+
+Both are built in, with no other skills needed: Coordinator bundles the parts it uses, with credit and their
+licences, in [third_party/](third_party/README.md).
 
 ## Guard rails
 
@@ -149,7 +167,9 @@ haven't.
   relevant.
 - **Agents stay in their lane.** A builder writes only inside its worktree and its task folder. The planner
   writes only the run's files. Agents never commit, push or switch branches; the scheduler commits.
-- **Nothing leaves your machine** unless you turn on `push`.
+- **Live on GitHub, never on your base branch.** After every merged task the run branch is pushed and its draft
+  pull request is updated. Nothing is merged into your base branch for you. Set `"push": false` to keep a run
+  local.
 
 ## How it compares
 
@@ -163,7 +183,7 @@ haven't.
 | Your approval | Once, on an audited plan | Ad hoc | None built in |
 | Tests | Off unless you ask; enforced by a hook | Written by default | Whatever the prompt says |
 | Proof work | The gate per task and one review; screenshots on request | Before/after pairs, pixel diffs, perf traces and full gates at every step | None built in |
-| Status | A live local page and notifications, at no token cost | Status files and HTML reports written by agents | The chat |
+| Status | A live local page, notifications, and a draft PR updated after every task | Status files and HTML reports written by agents | The chat |
 | Context per agent | Small: a fresh session per task | Grew to 250-460K tokens per worker | Grows with every iteration |
 | Pause, resume, plan-only, terminate | Yes, including resume weeks later from the project's files | Pause and resume through notes | Stop only |
 | Best for | Requests that split into several tasks | Retired | Watching something over time; short sequential lists |
@@ -191,10 +211,16 @@ nobody asked for. Numbers for 0.2 will be added here once it has done real runs 
 - Desktop notifications beyond macOS
 - Starter configs for common stacks
 
+## Credits
+
+Coordinator bundles material from [Impeccable](https://github.com/pbakaus/impeccable) by Paul Bakaus (Apache 2.0)
+and [icm-architect](https://github.com/RinDig/icm-architect) by Jake Van Clief (MIT). See
+[third_party/README.md](third_party/README.md) for what was taken and how it is used.
+
 ## Support
 
-Coordinator is maintained by [kodo-yousif](https://github.com/kodo-yousif) and will keep evolving. Issues and
-ideas are welcome on [GitHub](https://github.com/kodo-yousif/Coordinator/issues). Changes are listed in
+Coordinator is built and maintained by [Kodexa](https://github.com/Kodexa-software) and will keep evolving. Issues and
+ideas are welcome on [GitHub](https://github.com/Kodexa-software/Coordinator/issues). Changes are listed in
 [CHANGELOG.md](CHANGELOG.md).
 
 ## License

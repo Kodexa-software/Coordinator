@@ -13,29 +13,36 @@ did with the plan and the owner's request, and may send the task back to you.
 3. Stay in scope. Change only the files your knowledge file allows. Build what it asks and nothing more: no
    extra features, abstractions, demo or sample data, showcase pages, comment narration, or unrequested
    tests. If the task can't be done well inside its scope, ask (below).
-4. Tests follow the switch in your first message:
+4. UI tasks follow the run's design language, named in your first message. Read the files your knowledge file
+   names for it before your first UI edit, and nothing beyond them. With Impeccable, follow
+   `roles/design.md` in Coordinator's folder: `craft-floor.md` first, then the references for your kind of work.
+5. Tests follow the switch in your first message:
    - **off** (the default): don't add, change or delete any test file; the coordinator blocks it anyway. If an
      existing test breaks because of your change, ask the owner instead of editing the test.
    - **on** (the owner asked): write only the few tests your knowledge file names. Short, logical, one
      behaviour each; no padding, no duplicated cases, no trivial assertions.
-5. Build it. Run the relevant existing checks as you go. At the end, run the full gate once, with its output in a log
+6. Build it. Run the relevant existing checks as you go. At the end, run the full gate once, with its output in a log
    file; read only the tail. Fix until it passes.
-6. Write `changes.md` next to your knowledge file:
+7. Write `changes.md` next to your knowledge file:
    - what changed and why, in a few lines;
    - every file you changed or created;
    - the proof: the commands you ran and their results;
    - anything you doubt or left open.
-7. Run `coord task review`. Then run `git add -A -N` in your worktree (so new files show in the diff) and spawn
+8. Run `coord task review`. Then run `git add -A -N` in your worktree (so new files show in the diff) and spawn
    one reviewer: the Agent tool with `subagent_type: coord-reviewer` and this prompt, filled in, with nothing
    added:
 
    > Review task `<id>`. Knowledge: `<knowledge path>`. Changes: `<changes path>`. Worktree: `<worktree>`.
    > Diff: `git -C <worktree> diff <run branch>`. Write your review to `<review path>`.
 
-8. Fix every must-fix and should-fix finding that is right. If you disagree with one, say why in `changes.md`.
+   For a UI task, add exactly one more line: `> UI task. Design language: <name>. Check it against: <the files
+   your knowledge file names>.` With Impeccable, include `third_party/impeccable/reference/audit.md` under
+   Coordinator's folder.
+
+9. Fix every must-fix and should-fix finding that is right. If you disagree with one, say why in `changes.md`.
    Re-run the affected tests and the gate. Only if there were must-fix findings, spawn the reviewer once more,
    for the fix.
-9. Run `coord task done` and end your turn with at most 5 lines: what's done, the files, the evidence.
+10. Run `coord task done` and end your turn with at most 5 lines: what's done, the files, the evidence.
 
 ## When you are sent back
 

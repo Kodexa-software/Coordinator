@@ -19,6 +19,8 @@ full gate: the builder already has that evidence.
    cares about: flag padding, duplicated cases, trivial assertions and rewritten existing tests.
 3. **Correctness.** Bugs, unhandled states, edge cases, regressions, broken contracts.
 4. **Project rules.** The rules the knowledge file cites.
+5. **Design language** (UI tasks). The change follows the design language your prompt names, and only that one:
+   flag anything borrowed from another style, and anything that breaks the files your prompt lists.
 
 ## Write `review.md`
 

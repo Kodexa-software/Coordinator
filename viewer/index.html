@@ -184,7 +184,8 @@ function waves(tasks){
 function render(s){
   state = s; document.title = `${s.name} · Coordinator`;
   $("#name").textContent = s.name;
-  $("#sub").textContent = `${s.project} · ${s.mode==="plan"?"plan only":"run branch "+s.branch} · from ${s.base}`;
+  $("#sub").innerHTML = `${esc(s.project)} · ${s.mode==="plan"?"plan only":"run branch "+esc(s.branch)} · from ${esc(s.base)}` +
+    (s.pr_url ? ` · <a href="${esc(s.pr_url)}" target="_blank" rel="noopener" style="color:var(--gold)">pull request ↗</a>` : "");
   const st = $("#status"); st.className = "pill s-"+s.status; st.textContent = LABEL[s.status] || s.status;
   const work = s.tasks.filter((t)=>["build","merge"].includes(t.type));
   const done = work.filter((t)=>["done","skipped"].includes(t.status)).length;

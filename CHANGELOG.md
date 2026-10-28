@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0 - 2026-10-28
+
+- Coordinator is now a Kodexa project: github.com/Kodexa-software/Coordinator.
+- `.coordinator/` is added to the project's `.gitignore` automatically; `"gitignore": false` turns that off.
+- Design languages: when a request involves UI, the planner asks which one to follow (the project's own,
+  Impeccable's, or another), records it, and every UI task, its reviewer and the officer follow it. Impeccable's
+  UI-craft references are bundled under Apache 2.0.
+- `coord map`: a project map in `.coordinator/map/`, built with the System map method of Interpretable Context
+  Methodology (bundled from icm-architect under MIT). Planners read it before the code.
+- `.coordinator/AGENTS.md`: a generated entry file that routes to the config, the map and every run.
+- Pushes after every merged task, with a live draft pull request (on by default).
+- Tests are off unless the owner asks, enforced by a hook. The owner's later additions and answers count as their
+  words for the planner and the officer.
+
 ## 0.2.0 - 2026-10-28
 
 The first public release, rebuilt from scratch after measuring the earlier version on real runs.
@@ -12,6 +26,8 @@ The first public release, rebuilt from scratch after measuring the earlier versi
 - The owner approves the plan once. Independent tasks then build in parallel, each in its own git worktree with
   its own reviewer.
 - Merge conflicts and failing gates become small fix tasks.
+- The run branch is pushed after every merged task, and a draft pull request shows the full request, the plan
+  and every task, updated live. `"push": false` keeps a run local.
 - Tests are off unless the owner asks for them, enforced by a hook.
 - Pause, resume, plan-only runs, `add`, `tell`, `answer`, `accept`, `retry`, `stop` and `terminate`.
 - Before/after screenshots on request, composed into one PNG.

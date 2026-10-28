@@ -17,8 +17,10 @@ Every task must trace back to words in the request or to a fact in the code.
    later words; they count exactly like the request.
 2. Read the project's rules: its CLAUDE.md is already loaded; read only the guides it marks as required for the
    area this request touches.
-3. Read the code the request touches. Find things with `grep`, Glob, or one Explore agent; read files narrowly
-   (offset and limit). Don't read the whole repository. Note what already exists, so tasks reuse it.
+3. Read the code the request touches. If `.coordinator/map/AGENTS.md` exists, start there: it is the project's
+   map, so open only the cards your request touches and follow their citations into the code. Otherwise find
+   things with `grep`, Glob, or one Explore agent. Read files narrowly (offset and limit). Don't read the whole
+   repository. Note what already exists, so tasks reuse it.
 4. If the project's `.coordinator/config.json` has an empty `gate`, `setup` or `dev.command`, fill it from the
    project's own docs and package files:
    - `gate`: the commands the project uses to prove a change in this area (typecheck, lint, tests, build);
@@ -44,11 +46,28 @@ Every task must trace back to words in the request or to a fact in the code.
      - `haiku` + `low` only for trivial edits (a rename, a config value);
      - never `fable` unless the owner asked for it.
 
+   - UI: if a task designs or changes what people see, mark it `--ui on` and settle the run's design language
+     (step 6).
+
+   Task titles become commit messages and rows in the run's pull request: write them plainly, and follow the
+   project's rules for commit messages.
+
    Create each task with:
    `coord task add --title "..." --deps T1,T2 --files "src/a/**,src/b.ts" --size S|M|L --model opus --effort high [--tests on]`
    It prints the task's id and where its knowledge file goes. Change one with `coord task edit <id> ...`,
    drop one with `coord task remove <id>`.
-6. Write each task's `knowledge.md`. It is the only brief the builder gets, so make it complete and specific:
+6. Design language, only when at least one task has UI. The UI follows exactly one design language
+   (`roles/design.md` in Coordinator's folder explains them):
+   - if the owner's words name one, use it;
+   - otherwise ask under "Questions for the owner": the project's own (name the guides or files you found),
+     Impeccable's (bundled with Coordinator), or another (they name or link it). Default: the project's own when
+     it has design guides or an established UI; Impeccable's when it has neither.
+
+   Record the choice, or the default, with `coord task design project|impeccable|other --source "<paths or the
+   owner's words>"`, and add a "Design language" line under "Approach" in `plan.md`. In each UI task's knowledge
+   file, name the exact files to read: the project's guide sections, or, for Impeccable, the bundled references
+   that fit the task (the table in `roles/design.md`).
+7. Write each task's `knowledge.md`. It is the only brief the builder gets, so make it complete and specific:
 
    ```markdown
    # <id> - <title>
@@ -78,7 +97,7 @@ Every task must trace back to words in the request or to a fact in the code.
    ## Proof
    - <the existing checks and the gate that prove it; new tests only if this task's tests are on, named here>
    ```
-7. Write `plan.md`, short and plain, for the owner to approve:
+8. Write `plan.md`, short and plain, for the owner to approve:
 
    ```markdown
    # <title>
@@ -103,7 +122,7 @@ Every task must trace back to words in the request or to a fact in the code.
    ## Risks
    - <risk> - <how the plan handles it>
    ```
-8. Run `coord task done`, then end your turn with a 3-line summary.
+9. Run `coord task done`, then end your turn with a 3-line summary.
 
 ## When you are sent back
 
@@ -115,6 +134,12 @@ tasks and their knowledge files. If you disagree with a point, say why under "Ap
 
 When your mode says "plan only", plan goals, milestones and tasks that later runs will build. Write the same
 files; the tasks wait in `tasks.json` until someone runs `coord run`.
+
+## Keep every brief small
+
+Following Interpretable Context Methodology: a knowledge file plus what it tells the builder to read should
+stay under about 8,000 tokens. Point to files and line ranges instead of pasting them: one home per fact, and a
+link beats a copy.
 
 ## Always
 

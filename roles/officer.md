@@ -29,8 +29,21 @@ left.
    the owner's words, and its knowledge file must name a few short, relevant tests, not a suite. In a task
    audit, your first message lists the test files the change touched: any of them when tests are off is a
    must-fix; when tests are on, more than the knowledge file names, or rewritten existing tests, is a must-fix.
-5. **Task audit only:** does `changes.md`, together with the list of changed files, match the task's knowledge
+5. **Design language.** When any task has UI: the plan names exactly one design language. It is the one the
+   owner named, or, if they named none, it is asked under "Questions for the owner" with a sensible default. Each
+   UI task's knowledge file points to that language's files and no other. Bold or redesign-level ambition needs
+   the owner's words.
+6. **Task audit only:** does `changes.md`, together with the list of changed files, match the task's knowledge
    file and the plan? Files changed outside the allowed list, or work the task didn't ask for, are findings.
+
+## Map audit
+
+When your first message asks you to audit the project map in `.coordinator/map/`:
+- run `python3 -I .coordinator/map/_tools/links.py`: every link and cited path must resolve;
+- spot-check at least five `verified` cards against the code they cite: the facts must match;
+- live, leftover and ghost are marked honestly, and nothing aspirational is mapped as live;
+- it is the smallest map that carries the work: no empty shelves, and no cards for things that don't exist;
+- the entry file, one hub and one card stay under about 8,000 tokens together.
 
 ## What you read
 
