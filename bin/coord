@@ -1232,18 +1232,31 @@ def cmd_wait(a):
     print_status_text(r, r.load())
 
 
-def do_approve(r):
+def do_approve(r, note=""):
     with r.edit() as d:
         for t in d["tasks"]:
             if t["type"] == "plan" and t["status"] in ("waiting_on_you", "audit"):
                 t["status"], t["question"], t["question_kind"] = "done", "", ""
         if any(t["type"] == "plan" and t["status"] in OPEN for t in d["tasks"]):
             raise Fail("the plan is not ready yet")
+        if note:
+            add_owner_note(d, "answer", note)
         d["plan_approved"] = True
         d["status"] = derive_status(d)
     r.poke()
     start_daemon(r, "scheduler")
     return start_followups(r)
+
+
+def approve_with(r, answers, comment):
+    """The live page's approval: defaults and no comment approve; anything else goes back to the planner."""
+    lines = ["%s. %s - %s%s" % (a.get("n") or i + 1, a["question"], a["answer"], " (default)" if a.get("default") else "")
+             for i, a in enumerate(answers)]
+    text = "Answers to the plan's questions:\n" + "\n".join(lines) if lines else ""
+    if not comment and all(a.get("default") for a in answers):
+        return do_approve(r, text)
+    do_add(r, "\n\n".join(x for x in (text, "Comment: " + comment if comment else "") if x))
+    return []
 
 
 def followup_repo(r, path):
@@ -1411,9 +1424,7 @@ def cmd_simple(a):
         print("delivered to %s at its next step" % a.task if live else "added to %s's brief" % a.task)
 
 
-def cmd_add(a):
-    r = pick_run(a.run)
-    text = " ".join(a.text)
+def do_add(r, text):
     with r.edit() as d:
         add_owner_note(d, "addition", text)
         planner = next((t for t in d["tasks"] if t["type"] == "plan" and session_exists(t.get("session"))), None)
@@ -1435,6 +1446,10 @@ def cmd_add(a):
             "knowledge files. Don't touch tasks that are done.\n" % (tid, text))
     r.poke()
     start_daemon(r, "scheduler")
+
+
+def cmd_add(a):
+    do_add(pick_run(a.run), " ".join(a.text))
     print("the planner is updating the plan; it comes back to you after the officer's check")
 
 
@@ -2060,7 +2075,7 @@ def cmd_viewer(a):
             act = urlparse(self.path).path
             try:
                 if act == "/api/approve":
-                    do_approve(r)
+                    approve_with(r, body.get("answers") or [], (body.get("comment") or "").strip())
                 elif act == "/api/accept":
                     do_accept(r, body["task"])
                 elif act == "/api/answer":

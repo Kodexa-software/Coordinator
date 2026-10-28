@@ -137,6 +137,51 @@ main{max-width:1500px;margin:0 auto;padding:22px 24px 72px}
 .notice p{margin:0 0 12px;max-width:var(--co-measure);color:var(--co-ink-2)}
 .row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 
+/* The plan's short version: sections reveal in order once, each question settles on its own */
+.plan-card .pc{display:grid;gap:22px;max-width:820px;margin-top:18px}
+.pc-sec{animation:co-up var(--co-dur-page) var(--co-ease-arrive) backwards;animation-delay:calc(var(--i,0) * var(--co-stagger) + 120ms)}
+.pc h4{margin:0 0 8px;color:var(--co-muted);font-size:0.75rem;font-weight:var(--co-weight-strong);letter-spacing:.01em}
+.pc .md{font-size:var(--co-text-sm)}
+.pc .md>:last-child{margin-bottom:0}
+.pc .waves{margin:0}
+.pc-out{padding:12px 16px 12px 14px;border-radius:var(--co-radius-md);background:var(--co-warn-soft)}
+.pc-out h4{color:var(--co-warn)}
+.pc-out ul{margin:0;padding-left:18px}
+.pc-out li{margin:4px 0;line-height:1.5}
+.pc-out code{padding:1px 5px;border-radius:5px;background:color-mix(in srgb,var(--co-surface) 60%,transparent);font-size:.86em}
+.pc-when{color:var(--co-warn);font-weight:600}
+.qs{display:grid;gap:10px}
+.q{padding:12px 14px;border:1px solid var(--co-line);border-radius:var(--co-radius-md);
+  transition:background-color var(--co-dur-base) var(--co-ease-move),border-color var(--co-dur-base) var(--co-ease-move)}
+.q.settled,.q.fixed{background:var(--co-sunken)}
+.q-head{display:flex;align-items:baseline;gap:10px}
+.q-n{flex:none;min-width:12px;color:var(--co-muted);font:600 0.75rem var(--co-font-mono)}
+.q-text{min-width:0;font-weight:600;line-height:1.45;overflow-wrap:anywhere}
+.q-text code,.q-label code,.q-ans code{padding:1px 5px;border-radius:5px;background:var(--co-sunken);font-size:.86em}
+.q-body,.q-done{margin:10px 0 0 22px}
+.q-opts{display:grid;gap:6px;margin:0;padding:0;border:0}
+.q-opt{position:relative;display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border:1px solid var(--co-line);border-radius:var(--co-radius-sm);
+  cursor:pointer;line-height:1.45;transition:border-color var(--co-dur-quick) var(--co-ease-arrive),background-color var(--co-dur-quick) var(--co-ease-arrive)}
+.q-opt:hover{border-color:var(--co-line-strong)}
+.q-opt input{position:absolute;width:1px;height:1px;margin:0;opacity:0}
+.q-opt:has(input:checked){border-color:var(--co-accent);background:var(--co-accent-soft)}
+.q-dot{flex:none;width:14px;height:14px;margin-top:3px;border:1.5px solid var(--co-muted);border-radius:50%;
+  transition:border-width var(--co-dur-quick) var(--co-ease-arrive),border-color var(--co-dur-quick) var(--co-ease-arrive)}
+.q-opt input:checked~.q-dot{border:4.5px solid var(--co-accent)}
+.q-opt input:focus-visible~.q-dot{outline:2px solid transparent;box-shadow:var(--co-focus-ring)}
+.q-label{flex:1;min-width:0;overflow-wrap:anywhere}
+.q-def{flex:none;padding:1px 7px;border-radius:var(--co-radius-sm);background:var(--co-sunken);color:var(--co-ink-2);font-size:0.75rem;font-weight:600;line-height:1.5}
+.q-own{margin-top:8px;min-height:60px}
+.q-acts{margin-top:10px}
+.q-done{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+.q-ans{flex:1;min-width:0;color:var(--co-ink-2);overflow-wrap:anywhere}
+.q:not(.settled):not(.fixed) .q-done,.q.settled .q-body{display:none}
+.btn.sm{height:30px;padding:0 12px;font-size:var(--co-text-xs)}
+.settle-in{animation:co-up var(--co-dur-base) var(--co-ease-arrive)}
+.pc-label{display:block;margin:0 0 8px;color:var(--co-muted);font-size:0.75rem;font-weight:var(--co-weight-strong)}
+.pc-label span{font-weight:400}
+.pc-hint{align-self:center;color:var(--co-muted);font-size:var(--co-text-xs)}
+
 /* Tabs */
 .tabs{position:relative;display:flex;gap:2px;margin-bottom:20px;border-bottom:1px solid var(--co-line);overflow-x:auto;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
@@ -328,7 +373,7 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
 /* Reduced motion: no keyframed movement, short fades at most */
 @media (prefers-reduced-motion:reduce){
   .brand .co-row1,.brand .co-row2,.brand .co-row3{animation:none}
-  .title,.enter,.view-in,.btn.pr{animation-name:co-fade}
+  .title,.enter,.view-in,.btn.pr,.pc-sec,.settle-in{animation-name:co-fade}
   .task:hover,.btn:active{transform:none}
   .btn.pr:hover svg{transform:none}
   .tabs.ready::after{transition:none}
@@ -514,16 +559,123 @@ function card(t, a){
     ${t.tokens?`<span>${fmtTok(t.tokens)} · ${fmtMin(t.minutes)}</span>`:""}</div>`;
 }
 
+// The plan's short version, read from plan.md: goal, order, what this run leaves out, and each question to settle.
+let planSrc = "", planQs = [], planPick = {}, planComment = "";
+const planReady = (s) => !s.plan_approved && s.status==="waiting_on_you" && !s.tasks.some((t)=>t.status==="waiting_on_you");
+const isNone = (l) => /^\(?none\.?\)?$/i.test(l.trim());
+function planSection(src, name){
+  const out = []; let on = false;
+  (src||"").split("\n").forEach((l)=>{ if(/^##\s/.test(l)) on = l.slice(3).trim().toLowerCase()===name; else if(on) out.push(l); });
+  return out.join("\n").trim();
+}
+// Items of a list section, with wrapped lines joined to their item.
+function planItems(src, name, mark){
+  const items = [];
+  planSection(src, name).split("\n").forEach((l)=>{ const m = l.match(mark);
+    if(m) items.push(m); else if(items.length && l.trim()) items[items.length-1][items[items.length-1].length-1] += " "+l.trim(); });
+  return items;
+}
+// "1. <question> - options: <A> | <B> - default if unanswered: <A>"; other lines keep their default when one is named.
+function planQuestions(src){
+  const dash = "\\s+[-–—]\\s+";
+  return planItems(src, "questions for the owner", /^\s*(\d+)[.)]\s+(.*)$/).filter((m)=>!isNone(m[2])).map(([,n,raw], i)=>{
+    raw = raw.trim(); let m = raw.match(new RegExp("^(.*?)"+dash+"options:\\s*(.*?)"+dash+"default if unanswered:\\s*(.*)$","i"));
+    if(m){ const opts = m[2].split(/\s+\|\s+/).map((x)=>x.trim()).filter(Boolean), d = m[3].trim();
+      let def = opts.findIndex((o)=>o.toLowerCase()===d.toLowerCase()); if(def<0){ opts.unshift(d); def = 0; }
+      return {k:String(i), n, q:m[1].trim(), opts, def}; }
+    if((m = raw.match(new RegExp("^(.*?)"+dash+"answered:\\s*(.*)$","i")))) return {k:String(i), n, q:m[1].trim(), answered:m[2].trim()};
+    if((m = raw.match(new RegExp("^(.*?)"+dash+"default(?: if unanswered)?:\\s*(.*)$","i")))) return {k:String(i), n, q:m[1].trim(), opts:[m[2].trim()], def:0};
+    return {k:String(i), n, q:raw, opts:[], def:-1};
+  });
+}
+function followupWhen(s, f){
+  return f.status==="started" ? "started" : f.status==="failed" ? "failed to start" : f.status==="starting" ? "starting" : s.mode!=="build" ? "starts when the run builds" : "starts when you approve";
+}
+function qRow(q){
+  const head = `<div class="q-head"><span class="q-n">${esc(q.n)}</span><div class="q-text" id="q-${q.k}">${inline(esc(q.q))}</div></div>`;
+  if(q.answered!=null) return `<div class="q fixed" data-q="${q.k}">${head}<div class="q-done"><span class="pill sm s-done">Answered</span><span class="q-ans">${inline(esc(q.answered))}</span></div></div>`;
+  const opt = (v, label) => `<label class="q-opt"><input type="radio" name="q${q.k}" value="${v}"${String(q.def)===v?" checked":""}><span class="q-dot" aria-hidden="true"></span><span class="q-label">${label}</span>${String(q.def)===v?'<span class="q-def">default</span>':""}</label>`;
+  const opts = q.opts.length ? `<fieldset class="q-opts" aria-labelledby="q-${q.k}">${q.opts.map((o,i)=>opt(String(i), inline(esc(o)))).join("")}${opt("own","Your own answer")}</fieldset>` : "";
+  return `<div class="q" data-q="${q.k}">${head}<div class="q-body">${opts}<textarea class="q-own" placeholder="Your answer…" aria-label="Your own answer to question ${esc(q.n)}"${q.opts.length?" hidden":""}></textarea>
+    <div class="row q-acts"><button class="btn sm" data-settle="${q.k}">Settle</button></div></div>
+    <div class="q-done"><span class="pill sm s-done">Settled</span><span class="q-ans"></span><button class="btn sm" data-unsettle="${q.k}" aria-label="Change the answer to question ${esc(q.n)}">Change</button></div></div>`;
+}
+function planCard(s){
+  planQs = planQuestions(planSrc);
+  const goal = planSection(planSrc, "goal"), order = waves(s.tasks), open = planQs.filter((q)=>q.answered==null).length;
+  const out = planItems(planSrc, "not in this run", /^\s*[-*]\s+(.*)$/).map((m)=>m[1].trim()).filter((l)=>l && !isNone(l))
+    .map((l)=>`<li>${inline(esc(l))}</li>`).concat((s.followups||[]).map((f)=>`<li><strong>${esc(String(f.repo||"").split("/").filter(Boolean).pop()||f.repo)}</strong>: ${inline(esc(f.note))} · <span class="pc-when">${followupWhen(s, f)}</span></li>`));
+  let i = 0; const sec = (cls, html) => `<section class="pc-sec${cls?" "+cls:""}" style="--i:${i++}">${html}</section>`;
+  return `<h3>The plan is ready for you</h3><p>The hallucination officer has checked it.${open?" Settle each question, or approve them all.":""}</p><div class="pc">` +
+    (goal ? sec("", `<h4>Goal</h4><div class="md">${md(goal)}</div>`) : "") +
+    (order ? sec("", `<h4>Order</h4><div class="waves">${order}</div>`) : "") +
+    (out.length ? sec("pc-out", `<h4>Not in this run</h4><ul>${out.join("")}</ul>`) : "") +
+    (planQs.length ? sec("", `<h4>Questions</h4><div class="qs">${planQs.map(qRow).join("")}</div>`) : "") +
+    sec("", `<label class="pc-label" for="pc-comment">Your comment <span>(optional)</span></label><textarea id="pc-comment" data-plan-comment placeholder="Anything to change?"></textarea>
+      <div class="row"><button class="btn primary" data-act="approve-plan">Approve</button><button class="btn primary" data-act="send-plan" hidden>Send changes</button><button class="btn" data-open-tab="plan">Read the full plan</button><span class="pc-hint" hidden>Changes go back to the planner, then to you.</span></div>`) + "</div>";
+}
+// A row's answer: its choice, or its own text. Null when "Your own answer" is picked but empty.
+function planAnswer(q){
+  const p = planPick[q.k] || {}, pick = p.pick ?? (q.def>=0 ? String(q.def) : "own"), own = (p.own||"").trim();
+  if(pick==="own") return own ? {answer:own, default:false} : q.def<0 ? {answer:"no answer", default:true} : null;
+  return {answer:q.opts[+pick], default:+pick===q.def};
+}
+function planButtons(el){
+  const changed = !!planComment.trim() || planQs.some((q)=>{ if(q.answered!=null) return false; const a = planAnswer(q); return !a || !a.default; });
+  el.querySelector('[data-act="approve-plan"]').hidden = changed;
+  el.querySelector('[data-act="send-plan"]').hidden = !changed;
+  el.querySelector(".pc-hint").hidden = !changed;
+}
+function showSettled(row, q){
+  const a = planAnswer(q); row.classList.add("settled");
+  setHTML(row.querySelector(".q-ans"), inline(esc(a.answer)) + (a.default && q.def>=0 ? ' <span class="q-def">default</span>' : ""));
+}
+// After the card is (re)built, put back what the owner already chose.
+function applyPlan(el){
+  planQs.forEach((q)=>{
+    const p = planPick[q.k], row = el.querySelector(`.q[data-q="${q.k}"]`); if(!p || !row || q.answered!=null) return;
+    const r = p.pick!=null && row.querySelector(`input[value="${CSS.escape(p.pick)}"]`); if(r) r.checked = true;
+    const ta = row.querySelector(".q-own"); ta.value = p.own || ""; if(q.opts.length) ta.hidden = p.pick!=="own";
+    if(p.settled && planAnswer(q)) showSettled(row, q);
+  });
+  el.querySelector("[data-plan-comment]").value = planComment;
+  planButtons(el);
+}
+function settle(k, on){
+  const el = pools.attention && pools.attention.get("plan"), q = planQs.find((x)=>x.k===k); if(!el || !q) return;
+  const row = el.querySelector(`.q[data-q="${q.k}"]`), p = planPick[k] ||= {};
+  if(on){
+    if(!planAnswer(q)) return row.querySelector(".q-own").focus();
+    p.settled = true; showSettled(row, q); replay(row.querySelector(".q-done"), "settle-in");
+    row.querySelector("[data-unsettle]").focus({preventScroll:true});
+  } else {
+    p.settled = false; row.classList.remove("settled"); replay(row.querySelector(".q-body"), "settle-in");
+    const c = row.querySelector("input:checked") || row.querySelector(".q-own"); if(c) c.focus({preventScroll:true});
+  }
+}
+async function sendPlan(b){
+  const el = pools.attention && pools.attention.get("plan"), answers = []; if(!el) return;
+  for(const q of planQs){
+    if(q.answered!=null) continue;
+    const a = planAnswer(q);
+    if(!a){ const row = el.querySelector(`.q[data-q="${q.k}"]`); if(row.classList.contains("settled")) settle(q.k, false); return row.querySelector(".q-own").focus(); }
+    answers.push({n:q.n, question:q.q, answer:a.answer, default:a.default});
+  }
+  typing = false; b.disabled = true;
+  try{ await api("/api/approve", {answers, comment:planComment.trim()}); } finally { b.disabled = false; }
+}
+
 function renderAttention(s){
   const items = [];
-  if(!s.plan_approved && s.status==="waiting_on_you" && !s.tasks.some((t)=>t.status==="waiting_on_you"))
-    items.push({key:"plan", cls:"card notice", html:`<h3>The plan is ready for you</h3><p>The hallucination officer has checked it. Read it in the Plan tab, then approve it, or tell the coordinator what to change.</p><div class="row"><button class="btn primary" data-act="approve">Approve the plan</button><button class="btn" data-open-tab="plan">Read the plan</button></div>`});
+  if(planReady(s)) items.push({key:"plan", cls:"card notice plan-card", html:planCard(s)});
+  else { planPick = {}; planComment = ""; }
   s.tasks.filter((t)=>t.status==="waiting_on_you").forEach((t)=>items.push({key:"q-"+t.id, cls:"card notice", html:
     `<h3><span class="id">${esc(t.id)}</span>${esc(t.title)}</h3><p>${esc(t.question)}</p><textarea data-answer="${esc(t.id)}" placeholder="Your answer…" aria-label="Your answer to ${esc(t.id)}"></textarea>
      <div class="row"><button class="btn primary" data-act="answer" data-task="${esc(t.id)}">Send answer</button>${t.question_kind==="officer"||t.type==="plan"?`<button class="btn" data-act="accept" data-task="${esc(t.id)}">Accept as it is</button>`:""}</div>`}));
   if(!s.scheduler_alive && ["running","planning"].includes(s.status))
     items.push({key:"down", cls:"card notice bad", html:`<h3>The scheduler is not running</h3><p>Nothing is being worked on. Resume to pick up where it stopped.</p><div class="row"><button class="btn primary" data-act="resume">Resume</button></div>`});
   const parent = $("#attention"); sync("attention", items.map((it)=>({...it, parent})));
+  const pc = pools.attention.get("plan"); if(pc && pc._applied!==pc._html){ pc._applied = pc._html; applyPlan(pc); }
 }
 
 function renderBoard(s){
@@ -770,13 +922,14 @@ function showTab(tab){
 }
 
 document.addEventListener("click", async (e)=>{
-  const b = e.target.closest("[data-path],[data-view],#v-close,#v-back,[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],#d-close,#pause,#resume");
+  const b = e.target.closest("[data-path],[data-view],#v-close,#v-back,[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],[data-settle],[data-unsettle],#d-close,#pause,#resume");
   if(!b) return;
   if(b.id==="v-close" || b.id==="v-back") return closeViewer();
   if(b.dataset.path) return openViewer(b.dataset.path);
   if(b.dataset.view) return openViewer(b.dataset.view, true);
   if(b.id==="pause") return api("/api/pause"); if(b.id==="resume") return api("/api/resume");
   if(b.id==="d-close") return closeDrawer();
+  if(b.dataset.settle || b.dataset.unsettle) return settle(b.dataset.settle || b.dataset.unsettle, !!b.dataset.settle);
   if(b.dataset.file){ if(b.dataset.file===drawerFile) return; drawerFile = b.dataset.file; const t = state.tasks.find((x)=>x.id===drawer);
     drawerTabs(t ? tabsFor(t) : []); return showFile(drawer); }
   if(b.dataset.conv){ const t = state.tasks.find((x)=>x.id===drawer); if(!t || (conv && conv.key===b.dataset.conv)) return;
@@ -785,14 +938,27 @@ document.addEventListener("click", async (e)=>{
   if(tab) return showTab(tab);
   if(b.classList.contains("task")) return openDrawer(b.dataset.task);
   const act = b.dataset.act;
-  if(act==="approve") return api("/api/approve");
+  if(act==="approve-plan" || act==="send-plan") return sendPlan(b);
   if(act==="resume") return api("/api/resume");
   if(act==="accept") return api("/api/accept",{task:b.dataset.task});
   if(act==="answer"){ const ta = document.querySelector(`textarea[data-answer="${CSS.escape(b.dataset.task)}"]`); if(!ta.value.trim()) return ta.focus();
     typing=false; return api("/api/answer",{task:b.dataset.task,text:ta.value.trim()}); }
 });
-document.addEventListener("focusin",(e)=>{ if(e.target.matches("textarea")) typing=true; });
-document.addEventListener("focusout",(e)=>{ if(e.target.matches("textarea") && !e.target.value.trim()) typing=false; });
+// While the owner types or chooses, the attention cards aren't redrawn. The plan card keeps its choices in planPick,
+// so it lets go as soon as focus leaves.
+document.addEventListener("focusin",(e)=>{ if(e.target.matches("textarea, .pc input")) typing=true; });
+document.addEventListener("focusout",(e)=>{ if(e.target.matches("textarea, .pc input") && (e.target.closest(".pc") || !e.target.value.trim())) typing=false; });
+function planInput(e){
+  const t = e.target, el = t.closest(".plan-card"); if(!el) return;
+  if(t.matches("[data-plan-comment]")) planComment = t.value;
+  else { const row = t.closest(".q"); if(!row) return; const p = planPick[row.dataset.q] ||= {};
+    if(t.type==="radio"){ p.pick = t.value; const ta = row.querySelector(".q-own"), was = ta.hidden; ta.hidden = t.value!=="own";
+      if(was && !ta.hidden){ replay(ta, "settle-in"); } }
+    else if(t.matches(".q-own")) p.own = t.value; }
+  planButtons(el);
+}
+document.addEventListener("input", planInput);
+document.addEventListener("change", planInput);
 document.addEventListener("keydown",(e)=>{
   if(e.key==="Escape" && viewerOpen()) return closeViewer();
   if(e.key==="Escape" && drawer) return closeDrawer();
@@ -817,7 +983,8 @@ document.fonts && document.fonts.ready.then(()=>placeBar($("#tabs"), true));
 
 async function refresh(){
   try{ const r = await fetch("/api/state",{cache:"no-store"}); if(r.status===410){ setHTML($("#sub"), "This coordinator was terminated."); return; }
-       render(await r.json()); if(!$("#tab-plan").hidden) renderPlan(); }
+       const s = await r.json(); if(planReady(s) && !typing) planSrc = await text("", "plan.md");
+       render(s); if(!$("#tab-plan").hidden) renderPlan(); }
   catch(e){ setHTML($("#sub"), "The coordinator is not answering. It may have been terminated."); }
 }
 refresh().then(()=>{ const tab = location.hash.slice(1); if(["plan","request"].includes(tab)) showTab(tab); });
