@@ -1,7 +1,7 @@
 ---
 name: coordinate
 description: Conduct a background team of Claude Code agents in the current git project - a planner, a hallucination officer, builders in parallel worktrees and reviewers - from one request. Only when the user types /coordinate.
-argument-hint: <request> | plan <goal> | status | approve | answer <task> <text> | tell <task> <text> | add <text> | pause | resume | run | shots [note] | accept <task> | retry <task> | stop <task> | list | terminate [--purge]
+argument-hint: <request> | plan <goal> | status | update | approve | answer <task> <text> | tell <task> <text> | add <text> | pause | resume | run | shots [note] | accept <task> | retry <task> | stop <task> | list | terminate [--purge]
 disable-model-invocation: true
 ---
 
@@ -31,6 +31,7 @@ lines:
 | `shots [note]` | `coord shots "<note>"` (an agent takes before/after screenshots to the Desktop) |
 | `accept <task>`, `retry <task>`, `stop <task>` | `coord <command> <task>` |
 | `terminate [--purge]` | `coord terminate [--purge]`, then relay its summary |
+| `update` | `coord update`, then relay its line (a new session loads a new version) |
 
 Add `--run <name>` when the project has more than one coordinator and the owner named one.
 

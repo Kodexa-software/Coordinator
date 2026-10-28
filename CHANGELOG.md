@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1 - 2026-10-28
+
+- The clone install is the main one: it lists the command as plain `/coordinate`, which plugins can't.
+- `/coordinate update` (`coord update`) pulls the latest version of a clone install.
+
 ## 0.4.0 - 2026-10-28
 
 - The project's instructions come first. Every agent loads the same `CLAUDE.md`, `AGENTS.md` and `.claude/rules`

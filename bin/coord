@@ -1334,6 +1334,27 @@ def cmd_map(a):
     print("%s - %s. Live page: %s" % (name, title.lower(), url))
 
 
+def coord_version():
+    return (read_json(ROOT / ".claude-plugin" / "plugin.json", {}) or {}).get("version", "?")
+
+
+def cmd_update(a):
+    if not (ROOT / ".git").exists():
+        print("Coordinator is installed as a plugin here. Update it with:\n"
+              "  claude plugin marketplace update coordinator && claude plugin update coordinator@coordinator")
+        return
+    before = coord_version()
+    res = run(["git", "-C", ROOT, "pull", "--ff-only"], check=False)
+    if res.returncode:
+        raise Fail("couldn't update %s: %s" % (ROOT, (res.stderr or res.stdout).strip()[-300:]))
+    subprocess.run([str(ROOT / "install.sh")], capture_output=True)
+    after = coord_version()
+    if after == before:
+        print("Coordinator %s is up to date." % after)
+    else:
+        print("Updated Coordinator %s -> %s. Start a new Claude Code session to load the new /coordinate." % (before, after))
+
+
 def cmd_list(a):
     runs = list_runs(project_root())
     if not runs:
@@ -1823,6 +1844,9 @@ def main(argv=None):
     p.add_argument("note", nargs="*", help="optional: areas to map first")
     p.add_argument("--no-open", action="store_true")
     p.set_defaults(fn=cmd_map)
+
+    p = sub.add_parser("update", help="update Coordinator to the latest version (clone installs)")
+    p.set_defaults(fn=cmd_update)
 
     p = sub.add_parser("list", help="coordinators in this project")
     p.set_defaults(fn=cmd_list)

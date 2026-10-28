@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.4.0-c9a45c?style=flat-square">
+  <img alt="version" src="https://img.shields.io/badge/version-0.4.1-c9a45c?style=flat-square">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-1d2033?style=flat-square">
   <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-1d2033?style=flat-square">
   <img alt="scheduling" src="https://img.shields.io/badge/scheduling-zero%20tokens-c9a45c?style=flat-square">
@@ -56,21 +56,18 @@ flowchart LR
 
 ## Install
 
-**As a Claude Code plugin**
-
-```text
-/plugin marketplace add Kodexa-software/Coordinator
-/plugin install coordinator@coordinator
-```
-
-**From source**, so that `git pull` updates it:
-
 ```sh
-git clone https://github.com/Kodexa-software/Coordinator.git
-cd Coordinator && ./install.sh
+git clone https://github.com/Kodexa-software/Coordinator.git ~/.coordinator/app && ~/.coordinator/app/install.sh
 ```
 
-This links `coord` into `~/.local/bin` and `/coordinate` into `~/.claude/skills`.
+This links `/coordinate` into `~/.claude/skills` and `coord` into `~/.local/bin`. Start a new Claude Code session and
+type `/coordinate`. To update later, run `/coordinate update` (or `coord update` in a terminal), then start a new
+session.
+
+**As a Claude Code plugin** instead: `/plugin marketplace add Kodexa-software/Coordinator`, then
+`/plugin install coordinator@coordinator`. Claude Code lists plugin commands with the plugin's name, so it shows as
+`/coordinator:coordinate` (typing `/coordinate` also works). Update it with
+`claude plugin marketplace update coordinator && claude plugin update coordinator@coordinator`.
 
 **Needs:** a recent Claude Code CLI (`claude`), Python 3.9+, and git. The live pull request uses the GitHub CLI
 (`gh`). Before/after screenshots also need Node.js; Playwright is fetched on first use.
@@ -100,9 +97,10 @@ few words are enough:
 | `/coordinate shots [note]` | Before/after screenshots (base branch vs run branch) as one PNG on your Desktop |
 | `/coordinate map [areas]` | Build or refresh the project map in `.coordinator/map/`, which planners read before the code |
 | `/coordinate accept T3` / `retry T3` / `stop T3` | Settle a task the officer keeps sending back / start it fresh / skip it |
+| `/coordinate update` | Update Coordinator to the latest version |
 | `/coordinate terminate` | End the run: stop every process, remove worktrees and internal files, keep the branch and the knowledge |
 
-With the from-source install, every command also works in a terminal as `coord <command>`, with no model involved.
+With the clone install, every command also works in a terminal as `coord <command>`, with no model involved.
 
 ## The live page
 
