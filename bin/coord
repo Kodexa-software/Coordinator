@@ -519,8 +519,22 @@ def ensure_run_wt(r, data):
     if not wt.exists():
         wt.parent.mkdir(parents=True, exist_ok=True)
         git(r.project, "worktree", "add", str(wt), data["branch"])
+        ignore_store(r, wt)
         setup_worktree(r, wt)
     return wt
+
+
+def ignore_store(r, wt):
+    # On the run branch, so the line reaches the base branch through the run's PR and the owner's checkout stays clean
+    if not r.cfg.get("gitignore", True):
+        return
+    gi = wt / ".gitignore"
+    text = gi.read_text() if gi.exists() else ""
+    if any(line.strip() in ("/.coordinator/", ".coordinator/", "/.coordinator", ".coordinator") for line in text.splitlines()):
+        return
+    sep = "" if not text else ("\n" if text.endswith("\n") else "\n\n")
+    gi.write_text(text + sep + "# Coordinator's local knowledge\n/%s/\n" % STORE)
+    commit_all(wt, "Ignore Coordinator's local folder.", paths=(".gitignore",))
 
 
 def prepare_worktree(r, data, t):
@@ -758,8 +772,8 @@ def finish_job(r, job):
     r.log("finished %s %s (exit %s, %s tokens)" % (job.role, job.tid, job.p.returncode, tok))
 
 
-def commit_all(wt, msg):
-    git(wt, "add", "-A")
+def commit_all(wt, msg, paths=("-A",)):
+    git(wt, "add", *paths)
     merging = (Path(git(wt, "rev-parse", "--absolute-git-dir")) / "MERGE_HEAD").exists()
     if not git(wt, "status", "--porcelain") and not merging:
         return False
@@ -1073,12 +1087,6 @@ def ensure_store(project):
     text = exclude.read_text() if exclude.exists() else ""
     if "/%s/" % STORE not in text.split("\n"):
         exclude.write_text(text + ("" if text.endswith("\n") or not text else "\n") + "/%s/\n" % STORE)
-    if load_config(project).get("gitignore", True):
-        gi = project / ".gitignore"
-        text = gi.read_text() if gi.exists() else ""
-        if not any(line.strip() in ("/.coordinator/", ".coordinator/", "/.coordinator", ".coordinator") for line in text.splitlines()):
-            sep = "" if not text else ("\n" if text.endswith("\n") else "\n\n")
-            gi.write_text(text + sep + "# Coordinator's local knowledge\n/.coordinator/\n")
     cfg = store / "config.json"
     if not cfg.exists():
         write_json(cfg, {"base_branch": "", "gate": "", "gate_cwd": ".", "setup": "",

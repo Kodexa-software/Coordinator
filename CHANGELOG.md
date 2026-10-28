@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.2 - 2026-10-28
+
+- `.coordinator/` reaches `.gitignore` through the run: one commit on the run branch, merged with its pull request.
+  Coordinator no longer leaves an uncommitted `.gitignore` edit in your checkout, which diverged `main` from GitHub
+  when it was committed after the pull request was merged.
+
 ## 0.4.1 - 2026-10-28
 
 - The clone install is the main one: it lists the command as plain `/coordinate`, which plugins can't.

@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.4.1-c9a45c?style=flat-square">
+  <img alt="version" src="https://img.shields.io/badge/version-0.4.2-c9a45c?style=flat-square">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-1d2033?style=flat-square">
   <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-1d2033?style=flat-square">
   <img alt="scheduling" src="https://img.shields.io/badge/scheduling-zero%20tokens-c9a45c?style=flat-square">
@@ -120,8 +120,9 @@ questions there too. It runs on `127.0.0.1` only, reads the run's files, and cos
 | Run branch | `coord/<run>`, pushed after every merged task, with a draft PR | kept |
 | Task branches | `coord-tasks/<run>/<task>` | removed |
 
-`.coordinator/` is added to the project's `.gitignore` (and its local `.git/info/exclude`), so it is never committed by
-accident. Set `"gitignore": false` to keep your `.gitignore` untouched.
+`.coordinator/` is added to the local `.git/info/exclude`, so it is never committed by accident. Each run also adds it
+to `.gitignore` in one commit on the run branch, so it reaches your branch through the run's pull request and your own
+checkout is never left with an uncommitted edit. Set `"gitignore": false` to keep your `.gitignore` untouched.
 
 ## Configuration
 
@@ -140,7 +141,7 @@ haven't.
 | `permission_mode` | `"auto"` | Permission mode for background agents |
 | `deny` | push, commit, rebase, `reset --hard`, `gh pr`, publish, `sudo`, ... | Commands agents may never run |
 | `test_names` / `test_dirs` | common test file and folder patterns | What counts as a test file for the tests guard |
-| `gitignore` | `true` | Add `.coordinator/` to the project's `.gitignore` when it isn't there |
+| `gitignore` | `true` | Add `.coordinator/` to `.gitignore` on the run branch when it isn't there |
 | `push` / `pr` | `true` | Push the run branch after every merged task, and keep a draft PR with the request, the plan and the tasks up to date |
 | `base_branch` | the current branch | What the run branch starts from |
 
