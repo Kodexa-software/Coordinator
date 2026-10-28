@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coordinator</title>
+<link rel="icon" href="/logo.svg">
+<style>
+:root{
+  --bg:#f5f2ec;--panel:#fffdf8;--ink:#1d2033;--muted:#6f6a5f;--line:#e4ddd0;--chip:#efe9dd;
+  --gold:#a8833f;--gold-soft:#f3e7cc;--ok:#2f7d55;--ok-soft:#e1f1e7;--warn:#9a5b00;--warn-soft:#fbecd2;
+  --bad:#b3403a;--bad-soft:#f8e1de;--blue:#3a4fa0;--blue-soft:#e3e7f7;--shadow:0 1px 2px rgba(20,20,40,.06),0 4px 16px rgba(20,20,40,.05);
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0f1224;--panel:#171b33;--ink:#ece6d8;--muted:#a49d8c;--line:#2a2f4d;--chip:#21264a;
+  --gold:#e0c27c;--gold-soft:#3a3320;--ok:#6fcf97;--ok-soft:#1d3a2b;--warn:#e9b45f;--warn-soft:#3d2f17;
+  --bad:#f08a80;--bad-soft:#40211f;--blue:#9fb0ff;--blue-soft:#232b55;--shadow:none;
+}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif}
+header{display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5}
+header img{width:40px;height:40px;border-radius:10px}
+h1{font:600 20px/1.2 Georgia,"Iowan Old Style",serif;margin:0}
+.sub{color:var(--muted);font-size:12.5px}
+.grow{flex:1;min-width:0}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;letter-spacing:.02em;background:var(--chip);color:var(--muted);white-space:nowrap}
+.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.s-running,.s-planning{background:var(--blue-soft);color:var(--blue)}
+.s-waiting_on_you{background:var(--warn-soft);color:var(--warn)}
+.s-finished,.s-planned,.s-done{background:var(--ok-soft);color:var(--ok)}
+.s-paused,.s-skipped{background:var(--chip);color:var(--muted)}
+.s-in_progress,.s-review{background:var(--blue-soft);color:var(--blue)}
+.s-audit{background:var(--gold-soft);color:var(--gold)}
+.s-queue{background:var(--chip);color:var(--muted)}
+.stats{display:flex;gap:18px;color:var(--muted);font-size:12.5px;white-space:nowrap}
+.stats b{color:var(--ink);font-weight:600}
+button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:6px 12px;border-radius:8px;cursor:pointer}
+button:hover{border-color:var(--gold)}
+button.primary{background:var(--gold);border-color:var(--gold);color:#fff}
+@media (prefers-color-scheme:dark){button.primary{color:#1a1608}}
+.bar{height:3px;background:var(--line)}
+.bar>div{height:100%;background:var(--gold);transition:width .6s ease}
+main{padding:20px 24px 60px;max-width:1500px;margin:0 auto}
+.attention{display:grid;gap:12px;margin-bottom:20px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+.notice{padding:14px 16px;border-left:3px solid var(--warn)}
+.notice h3{margin:0 0 4px;font-size:14px}
+.notice p{margin:0 0 10px;color:var(--muted)}
+.notice textarea{width:100%;min-height:56px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);padding:8px;font:inherit;resize:vertical}
+.row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:16px}
+.tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:8px 12px;color:var(--muted)}
+.tabs button.on{color:var(--ink);border-bottom-color:var(--gold)}
+.board{display:grid;grid-template-columns:repeat(5,minmax(200px,1fr));gap:14px;align-items:start}
+.col h4{margin:0 0 8px;font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between}
+.col .list{display:grid;gap:8px}
+.task{padding:10px 12px;cursor:pointer;transition:border-color .15s,transform .15s}
+.task:hover{border-color:var(--gold);transform:translateY(-1px)}
+.task .id{font:600 11.5px ui-monospace,Menlo,monospace;color:var(--gold)}
+.task .t{font-weight:600;margin:2px 0 6px}
+.meta{display:flex;flex-wrap:wrap;gap:6px;font-size:11.5px;color:var(--muted)}
+.meta span{background:var(--chip);border-radius:6px;padding:1px 6px}
+.live{color:var(--blue)}
+.empty{color:var(--muted);font-size:12.5px;padding:8px 2px}
+.plan{padding:20px 24px;max-width:900px}
+.waves{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch;margin:4px 0 22px}
+.wave{padding:10px 12px;min-width:150px}
+.wave b{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.wave div{font-size:13px}
+.arrow{align-self:center;color:var(--muted)}
+.md h1,.md h2,.md h3{font-family:Georgia,"Iowan Old Style",serif;font-weight:600;line-height:1.25}
+.md h1{font-size:24px;margin:0 0 12px}.md h2{font-size:18px;margin:22px 0 8px}.md h3{font-size:15px;margin:16px 0 6px}
+.md table{border-collapse:collapse;width:100%;margin:8px 0;font-size:13px}
+.md th,.md td{border:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
+.md th{background:var(--chip)}
+.md code{font:12.5px ui-monospace,Menlo,monospace;background:var(--chip);padding:1px 4px;border-radius:4px}
+.md pre{background:var(--chip);padding:10px 12px;border-radius:8px;overflow:auto}
+.md pre code{background:none;padding:0}
+.md blockquote{margin:8px 0;padding:2px 12px;border-left:3px solid var(--gold);color:var(--muted)}
+.md a{color:var(--blue)}
+aside{position:fixed;top:0;right:0;bottom:0;width:min(720px,100vw);background:var(--panel);border-left:1px solid var(--line);box-shadow:-8px 0 30px rgba(0,0,0,.12);transform:translateX(102%);transition:transform .25s ease;z-index:10;display:flex;flex-direction:column}
+aside.open{transform:none}
+aside .head{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:flex-start}
+aside .body{padding:4px 20px 30px;overflow:auto}
+.request{white-space:pre-wrap;padding:16px 18px;font-size:14px}
+@media (max-width:1000px){.board{grid-template-columns:1fr 1fr}.stats{display:none}}
+@media (max-width:600px){.board{grid-template-columns:1fr}header{padding:14px 16px}main{padding:16px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<header>
+  <img src="/logo.svg" alt="">
+  <div class="grow">
+    <h1 id="name">Coordinator</h1>
+    <div class="sub" id="sub">connecting…</div>
+  </div>
+  <div class="stats" id="stats"></div>
+  <span class="pill" id="status">…</span>
+  <button id="pause" hidden>Pause</button>
+  <button id="resume" hidden>Resume</button>
+</header>
+<div class="bar"><div id="progress" style="width:0"></div></div>
+<main>
+  <div class="attention" id="attention"></div>
+  <div class="tabs">
+    <button data-tab="board" class="on">Tasks</button>
+    <button data-tab="plan">Plan</button>
+    <button data-tab="request">Request</button>
+  </div>
+  <section id="tab-board"><div class="board" id="board"></div></section>
+  <section id="tab-plan" hidden><div class="card plan"><div class="waves" id="waves"></div><div class="md" id="plan"></div><div id="audits"></div></div></section>
+  <section id="tab-request" hidden><div class="card request" id="request"></div></section>
+</main>
+<aside id="drawer">
+  <div class="head">
+    <div class="grow"><div class="id" id="d-id" style="font:600 12px ui-monospace,Menlo,monospace;color:var(--gold)"></div><h1 id="d-title" style="font-size:18px"></h1><div class="meta" id="d-meta" style="margin-top:6px"></div></div>
+    <button id="d-close" aria-label="Close">✕</button>
+  </div>
+  <div class="tabs" id="d-tabs" style="padding:0 20px;margin:0"></div>
+  <div class="body md" id="d-body"></div>
+</aside>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const COLS = [["queue","Queued",["queue"]],["work","Working",["in_progress","review"]],["audit","Officer check",["audit"]],
+              ["you","Waiting on you",["waiting_on_you","paused"]],["done","Done",["done","skipped"]]];
+const LABEL = {queue:"queued",in_progress:"building",review:"in review",audit:"officer check",waiting_on_you:"waiting on you",
+               paused:"paused",done:"done",skipped:"skipped",running:"running",planning:"planning",finished:"finished",planned:"planned"};
+let state = null, drawer = null, drawerFile = null, typing = false;
+
+function fmtTok(n){ n = n||0; return n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1e3 ? Math.round(n/1e3)+"K" : String(n); }
+function fmtMin(m){ m = Math.round(m||0); return m >= 60 ? Math.floor(m/60)+"h "+String(m%60).padStart(2,"0")+"m" : m+"m"; }
+function since(iso){ if(!iso) return ""; const s = (Date.now()-Date.parse(iso))/1000; return s < 90 ? Math.round(s)+"s" : s < 5400 ? Math.round(s/60)+"m" : (s/3600).toFixed(1)+"h"; }
+
+function inline(s){
+  return s.replace(/`([^`]+)`/g,"<code>$1</code>").replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>")
+          .replace(/(^|[^*])\*([^*\s][^*]*)\*/g,"$1<em>$2</em>").replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+function md(src){
+  const lines = esc(src||"").split("\n"); let out = [], i = 0;
+  while(i < lines.length){
+    let l = lines[i];
+    if(/^```/.test(l)){ const buf=[]; i++; while(i<lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]); i++; out.push("<pre><code>"+buf.join("\n")+"</code></pre>"); continue; }
+    const h = l.match(/^(#{1,4})\s+(.*)/); if(h){ out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); i++; continue; }
+    if(/^\s*\|/.test(l) && i+1<lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i+1])){
+      const row = (r) => r.trim().replace(/^\||\|$/g,"").split("|").map((c)=>inline(c.trim()));
+      const head = row(l); i += 2; const body = [];
+      while(i<lines.length && /^\s*\|/.test(lines[i])) body.push(row(lines[i++]));
+      out.push("<table><thead><tr>"+head.map((c)=>"<th>"+c+"</th>").join("")+"</tr></thead><tbody>"+body.map((r)=>"<tr>"+r.map((c)=>"<td>"+c+"</td>").join("")+"</tr>").join("")+"</tbody></table>"); continue; }
+    if(/^\s*([-*]|\d+\.)\s+/.test(l)){
+      const ordered = /^\s*\d+\./.test(l); const items = [];
+      while(i<lines.length && (/^\s*([-*]|\d+\.)\s+/.test(lines[i]) || (/^\s{2,}\S/.test(lines[i]) && items.length))){
+        if(/^\s*([-*]|\d+\.)\s+/.test(lines[i]) && !/^\s{3,}/.test(lines[i])) items.push(lines[i].replace(/^\s*([-*]|\d+\.)\s+/,""));
+        else items[items.length-1] += "<br>" + lines[i].trim().replace(/^([-*]|\d+\.)\s+/,"• ");
+        i++; }
+      out.push((ordered?"<ol>":"<ul>")+items.map((x)=>"<li>"+inline(x)+"</li>").join("")+(ordered?"</ol>":"</ul>")); continue; }
+    if(/^&gt;\s?/.test(l)){ const buf=[]; while(i<lines.length && /^&gt;\s?/.test(lines[i])) buf.push(lines[i++].replace(/^&gt;\s?/,"")); out.push("<blockquote>"+inline(buf.join(" "))+"</blockquote>"); continue; }
+    if(!l.trim()){ i++; continue; }
+    const buf=[]; while(i<lines.length && lines[i].trim() && !/^(#{1,4}\s|```|\s*([-*]|\d+\.)\s|\s*\||&gt;)/.test(lines[i])) buf.push(lines[i++]);
+    if(!buf.length) buf.push(lines[i++]);
+    out.push("<p>"+inline(buf.join(" "))+"</p>");
+  }
+  return out.join("");
+}
+
+async function api(path, body){
+  const r = await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})});
+  const j = await r.json().catch(()=>({})); if(!r.ok) alertBox(j.error||"failed"); await refresh();
+}
+function alertBox(msg){ const n = document.createElement("div"); n.className="card notice"; n.style.borderLeftColor="var(--bad)"; n.textContent=msg; $("#attention").prepend(n); setTimeout(()=>n.remove(),6000); }
+async function text(task, name){ const r = await fetch(`/api/file?${task?"task="+encodeURIComponent(task)+"&":""}name=${encodeURIComponent(name)}`); return r.ok ? r.text() : ""; }
+
+function waves(tasks){
+  const work = tasks.filter((t)=>["build","merge"].includes(t.type) && t.status!=="skipped");
+  const by = Object.fromEntries(work.map((t)=>[t.id,t])); const lvl = {};
+  const depth = (t, seen=new Set()) => { if(lvl[t.id]!=null) return lvl[t.id]; if(seen.has(t.id)) return 0; seen.add(t.id);
+    const ds = t.depends_on.filter((d)=>by[d]).map((d)=>depth(by[d],seen)); return lvl[t.id] = ds.length ? Math.max(...ds)+1 : 0; };
+  work.forEach((t)=>depth(t)); const groups = [];
+  work.forEach((t)=>{ (groups[lvl[t.id]] ||= []).push(t); });
+  return groups.map((g,i)=>`${i?'<span class="arrow">→</span>':""}<div class="card wave"><b>${g.length>1?"In parallel":"Step"} ${i+1}</b>${g.map((t)=>`<div><span class="id" style="font:600 11px ui-monospace,Menlo,monospace;color:var(--gold)">${esc(t.id)}</span> ${esc(t.title)}</div>`).join("")}</div>`).join("");
+}
+
+function render(s){
+  state = s; document.title = `${s.name} · Coordinator`;
+  $("#name").textContent = s.name;
+  $("#sub").textContent = `${s.project} · ${s.mode==="plan"?"plan only":"run branch "+s.branch} · from ${s.base}`;
+  const st = $("#status"); st.className = "pill s-"+s.status; st.textContent = LABEL[s.status] || s.status;
+  const work = s.tasks.filter((t)=>["build","merge"].includes(t.type));
+  const done = work.filter((t)=>["done","skipped"].includes(t.status)).length;
+  $("#progress").style.width = (work.length ? 100*done/work.length : 0)+"%";
+  const tok = s.tasks.reduce((a,t)=>a+(t.tokens||0),0), mins = s.tasks.reduce((a,t)=>a+(t.minutes||0),0);
+  const end = ["finished","planned"].includes(s.status) ? s.updated : null;
+  const wall = ((end?Date.parse(end):Date.now()) - Date.parse(s.created))/60000;
+  $("#stats").innerHTML = `<span><b>${done}/${work.length}</b> tasks</span><span><b>${fmtMin(wall)}</b> elapsed</span><span><b>${fmtMin(mins)}</b> agent time</span><span><b>${fmtTok(tok)}</b> tokens</span><span><b>${Object.keys(s.agents||{}).length}</b> agents live</span>`;
+  $("#pause").hidden = !["running","planning","waiting_on_you"].includes(s.status);
+  $("#resume").hidden = !(s.status==="paused" || (!s.scheduler_alive && ["running","planning"].includes(s.status)));
+
+  if(!typing){
+    const att = [];
+    if(!s.plan_approved && s.status==="waiting_on_you" && !s.tasks.some((t)=>t.status==="waiting_on_you"))
+      att.push(`<div class="card notice"><h3>The plan is ready for you</h3><p>The hallucination officer has checked it. Read it in the Plan tab, then approve it — or tell the coordinator what to change.</p><div class="row"><button class="primary" data-act="approve">Approve the plan</button><button data-open-tab="plan">Read the plan</button></div></div>`);
+    s.tasks.filter((t)=>t.status==="waiting_on_you").forEach((t)=>att.push(
+      `<div class="card notice"><h3>${esc(t.id)} · ${esc(t.title)}</h3><p>${esc(t.question)}</p><textarea data-answer="${esc(t.id)}" placeholder="Your answer…"></textarea>
+       <div class="row"><button class="primary" data-act="answer" data-task="${esc(t.id)}">Send answer</button>${t.question_kind==="officer"||t.type==="plan"?`<button data-act="accept" data-task="${esc(t.id)}">Accept as it is</button>`:""}</div></div>`));
+    if(!s.scheduler_alive && ["running","planning"].includes(s.status))
+      att.push(`<div class="card notice" style="border-left-color:var(--bad)"><h3>The scheduler is not running</h3><p>Nothing is being worked on. Resume to pick up where it stopped.</p><div class="row"><button class="primary" data-act="resume">Resume</button></div></div>`);
+    $("#attention").innerHTML = att.join("");
+  }
+
+  const live = Object.values(s.agents||{});
+  $("#board").innerHTML = COLS.map(([key,label,sts])=>{
+    const items = s.tasks.filter((t)=>sts.includes(t.status));
+    return `<div class="col"><h4><span>${label}</span><span>${items.length}</span></h4><div class="list">${items.map((t)=>{
+      const a = live.find((x)=>x.task===t.id);
+      return `<div class="card task" data-task="${esc(t.id)}"><div class="id">${esc(t.id)} · ${esc(t.type)}</div><div class="t">${esc(t.title)}</div><div class="meta">
+        ${a?`<span class="live">● ${esc(a.role)} ${since(a.since)}</span>`:`<span class="pill s-${t.status}" style="padding:0 7px;font-size:11px">${LABEL[t.status]||t.status}</span>`}
+        ${t.model?`<span>${esc(t.model)}${t.effort?" · "+esc(t.effort):""}</span>`:""}${t.size&&t.type!=="plan"?`<span>${esc(t.size)}</span>`:""}
+        ${t.depends_on.length?`<span>after ${esc(t.depends_on.join(", "))}</span>`:""}${t.tests?`<span>tests on</span>`:""}${t.audit_round?`<span>officer ×${t.audit_round}</span>`:""}
+        ${t.tokens?`<span>${fmtTok(t.tokens)} · ${fmtMin(t.minutes)}</span>`:""}</div></div>`; }).join("") || '<div class="empty">—</div>'}</div></div>`;
+  }).join("");
+  $("#request").innerHTML = esc(s.request) + (s.owner_notes||[]).map((n)=>`<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)"><div class="sub">${esc(n.at.slice(0,16).replace("T"," "))} · ${esc(n.kind)}${n.task?" to "+esc(n.task):""}</div>${esc(n.text)}</div>`).join("");
+  $("#waves").innerHTML = waves(s.tasks);
+  if(drawer) openDrawer(drawer, true);
+}
+
+async function renderPlan(){
+  if(!state) return;
+  $("#plan").innerHTML = state.plan_present ? md(await text("", "plan.md")) : '<p class="empty">The planner is still writing the plan.</p>';
+  const audits = state.plan_audits || [];
+  $("#audits").innerHTML = audits.length ? `<h2 style="font-family:Georgia,serif;font-size:18px;margin-top:26px">Officer reports</h2>` +
+    (await Promise.all(audits.map(async (f)=>`<details class="card" style="padding:10px 14px;margin:8px 0"><summary>${esc(f)}</summary><div class="md">${md(await text("", f))}</div></details>`))).join("") : "";
+}
+
+async function openDrawer(id, keep){
+  const t = state && state.tasks.find((x)=>x.id===id); if(!t) return;
+  drawer = id; $("#drawer").classList.add("open");
+  $("#d-id").textContent = `${t.id} · ${t.type}`; $("#d-title").textContent = t.title;
+  $("#d-meta").innerHTML = `<span class="pill s-${t.status}">${LABEL[t.status]||t.status}</span>` + [t.model&&`${t.model}${t.effort?" · "+t.effort:""}`, t.files.length&&`files: ${t.files.join(", ")}`, t.tokens&&`${fmtTok(t.tokens)} tokens · ${fmtMin(t.minutes)}`].filter(Boolean).map((x)=>`<span>${esc(x)}</span>`).join("");
+  const files = t.files_present || [];
+  if(!keep || !files.includes(drawerFile)) drawerFile = files[0] || null;
+  $("#d-tabs").innerHTML = files.map((f)=>`<button data-file="${esc(f)}" class="${f===drawerFile?"on":""}">${esc(f.replace(".md",""))}</button>`).join("");
+  if(!keep) $("#d-body").innerHTML = drawerFile ? md(await text(t.id, drawerFile)) : '<p class="empty">Nothing written yet.</p>';
+}
+
+document.addEventListener("click", async (e)=>{
+  const b = e.target.closest("[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],#d-close,#pause,#resume");
+  if(!b) return;
+  if(b.id==="pause") return api("/api/pause"); if(b.id==="resume") return api("/api/resume");
+  if(b.id==="d-close"){ drawer=null; $("#drawer").classList.remove("open"); return; }
+  if(b.dataset.file){ drawerFile=b.dataset.file; [...$("#d-tabs").children].forEach((x)=>x.classList.toggle("on",x===b)); $("#d-body").innerHTML = md(await text(drawer, drawerFile)); return; }
+  const tab = b.dataset.tab || b.dataset.openTab;
+  if(tab){ document.querySelectorAll(".tabs [data-tab]").forEach((x)=>x.classList.toggle("on",x.dataset.tab===tab));
+    ["board","plan","request"].forEach((x)=>$("#tab-"+x).hidden = x!==tab); if(tab==="plan") renderPlan(); return; }
+  if(b.classList.contains("task")) return openDrawer(b.dataset.task);
+  const act = b.dataset.act;
+  if(act==="approve") return api("/api/approve");
+  if(act==="resume") return api("/api/resume");
+  if(act==="accept") return api("/api/accept",{task:b.dataset.task});
+  if(act==="answer"){ const ta = document.querySelector(`textarea[data-answer="${CSS.escape(b.dataset.task)}"]`); if(!ta.value.trim()) return ta.focus();
+    typing=false; return api("/api/answer",{task:b.dataset.task,text:ta.value.trim()}); }
+});
+document.addEventListener("focusin",(e)=>{ if(e.target.matches("textarea")) typing=true; });
+document.addEventListener("focusout",(e)=>{ if(e.target.matches("textarea") && !e.target.value.trim()) typing=false; });
+document.addEventListener("keydown",(e)=>{ if(e.key==="Escape" && drawer){ drawer=null; $("#drawer").classList.remove("open"); } });
+
+async function refresh(){
+  try{ const r = await fetch("/api/state",{cache:"no-store"}); if(r.status===410){ $("#sub").textContent="This coordinator was terminated."; return; }
+       render(await r.json()); if(!$("#tab-plan").hidden) renderPlan(); }
+  catch(e){ $("#sub").textContent = "The coordinator is not answering — it may have been terminated."; }
+}
+refresh().then(()=>{ const tab = location.hash.slice(1); if(["plan","request"].includes(tab)) document.querySelector(`[data-tab="${tab}"]`).click(); });
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "coordinator",
+  "owner": {
+    "name": "kodo-yousif"
+  },
+  "plugins": [
+    {
+      "name": "coordinator",
+      "source": "./",
+      "description": "Conduct a background team of Claude Code agents from one request.",
+      "repository": "https://github.com/kodo-yousif/Coordinator",
+      "license": "MIT"
+    }
+  ]
+}

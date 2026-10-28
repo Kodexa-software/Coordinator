@@ -1,0 +1,1684 @@
+#!/usr/bin/env python3
+"""coord - the task store, scheduler and live page behind /coordinate.
+
+Knowledge lives in the project: <project>/.coordinator/<run>/ holds plan.md,
+tasks.json and one folder per task. Process state, logs and worktrees live in
+~/.coordinator/runs/<run>/, and `coord terminate` removes them.
+
+Scheduling, merging and the live page are plain code and cost no tokens.
+Agents run as separate background `claude -p` sessions.
+"""
+import argparse
+import datetime as dt
+import fcntl
+import hashlib
+import json
+import os
+import re
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+from urllib.request import urlopen
+
+ROOT = Path(__file__).resolve().parent.parent
+HOME = Path(os.environ.get("COORD_HOME") or Path.home() / ".coordinator")
+STORE = ".coordinator"
+WORK = ("build", "merge")
+OPEN = ("queue", "in_progress", "review", "audit")
+WAIT_STATES = ("waiting_on_you", "finished", "planned", "paused")
+TASK_FILES = ("knowledge.md", "changes.md", "review.md", "resume.md")
+ROLE_NAMES = {"planner": "planner", "builder": "builder", "officer": "hallucination officer", "shooter": "screenshot taker"}
+
+DEFAULTS = {
+    "base_branch": "",
+    "max_parallel": 3,
+    "setup": "",
+    "gate": "",
+    "gate_cwd": ".",
+    "dev": {"command": "", "cwd": ".", "ready_path": "/"},
+    "shots": {"widths": [1280, 390], "themes": ["light", "dark"], "height": 900, "wait_ms": 1500},
+    "models": {"planner": "opus", "builder": "opus", "reviewer": "opus", "officer": "opus", "shooter": "haiku"},
+    "efforts": {"planner": "high", "builder": "high", "reviewer": "medium", "officer": "high",
+                "officer_task": "medium", "shooter": "low"},
+    "officer": {"plan": True, "tasks": True, "max_rounds": 3},
+    "permission_mode": "auto",
+    "deny": [
+        "Bash(git push:*)", "Bash(git commit:*)", "Bash(git rebase:*)", "Bash(git reset --hard:*)",
+        "Bash(git branch -D:*)", "Bash(git worktree:*)", "Bash(gh pr:*)", "Bash(gh release:*)",
+        "Bash(gh repo:*)", "Bash(npm publish:*)", "Bash(sudo:*)", "Artifact", "RemoteTrigger",
+    ],
+    "test_names": ["*.test.*", "*.spec.*", "test_*.py", "*_test.*", "*Tests.cs", "*Test.java", "*Test.kt", "*_spec.rb"],
+    "test_dirs": ["test", "tests", "__tests__", "spec", "specs"],
+    "push": False,
+    "pr": False,
+    "claude": "claude",
+    "playwright": "playwright@1.56.1",
+}
+
+
+class Fail(Exception):
+    pass
+
+
+# ---------------------------------------------------------------- utilities
+
+def now():
+    return dt.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def run(cmd, cwd=None, env=None, check=True):
+    r = subprocess.run([str(c) for c in cmd], cwd=cwd and str(cwd), env=env, text=True, capture_output=True)
+    if check and r.returncode != 0:
+        msg = (r.stderr or r.stdout).strip()[-800:]
+        raise Fail("`%s` failed: %s" % (" ".join(str(c) for c in cmd[:4]), msg))
+    return r
+
+
+def git(cwd, *args, check=True):
+    return run(["git", *args], cwd=cwd, check=check).stdout.strip()
+
+
+def read_json(path, default=None):
+    try:
+        return json.loads(Path(path).read_text())
+    except (FileNotFoundError, ValueError):
+        return default
+
+
+def write_json(path, data):
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    os.replace(tmp, path)
+
+
+def nonempty(path):
+    p = Path(path)
+    return p.exists() and p.read_text().strip() != ""
+
+
+def slug(text, n=40):
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return s[:n].strip("-") or "run"
+
+
+def alive(pid):
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def kill_group(pid, grace=5.0):
+    if not alive(pid):
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(int(pid), sig)
+        except OSError:
+            try:
+                os.kill(int(pid), sig)
+            except OSError:
+                return
+        end = time.time() + grace
+        while time.time() < end and alive(pid):
+            time.sleep(0.2)
+        if not alive(pid):
+            return
+
+
+def notify(title, text):
+    if sys.platform == "darwin":
+        script = "display notification %s with title %s" % (json.dumps(text), json.dumps(title))
+        subprocess.run(["osascript", "-e", script], capture_output=True)
+
+
+def open_url(url):
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    if shutil.which(opener):
+        subprocess.run([opener, url], capture_output=True)
+
+
+def free_port(preferred=0):
+    for port in (preferred, 0) if preferred else (0,):
+        s = socket.socket()
+        try:
+            s.bind(("127.0.0.1", port))
+            return s.getsockname()[1]
+        except OSError:
+            continue
+        finally:
+            s.close()
+    raise Fail("no free port")
+
+
+def human_minutes(m):
+    m = int(round(m or 0))
+    return "%dh %02dm" % (m // 60, m % 60) if m >= 60 else "%dm" % m
+
+
+def human_tokens(n):
+    n = n or 0
+    return "%.1fM" % (n / 1e6) if n >= 1e6 else "%dK" % (n / 1e3) if n >= 1e3 else str(n)
+
+
+def png_size(path):
+    with open(path, "rb") as f:
+        head = f.read(24)
+    return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+
+
+def is_test_file(cfg, path):
+    import fnmatch
+    parts = Path(path).parts
+    if any(fnmatch.fnmatch(parts[-1], pat) for pat in cfg.get("test_names", [])):
+        return True
+    return any(d in cfg.get("test_dirs", []) or d.endswith("Tests") or d.endswith(".Tests") for d in parts[:-1])
+
+
+def owner_words(data):
+    lines = [data["request"]]
+    for n in data.get("owner_notes", []):
+        where = " (to %s)" % n["task"] if n.get("task") else ""
+        lines.append("\n[%s, %s%s] %s" % (n["at"][:16], n["kind"], where, n["text"]))
+    return "\n".join(lines)
+
+
+def add_owner_note(data, kind, text, task=""):
+    data.setdefault("owner_notes", []).append({"at": now(), "kind": kind, "task": task, "text": text})
+
+
+def changed_files(wt, branch):
+    run(["git", "add", "-A", "-N"], cwd=wt, check=False)
+    out = run(["git", "diff", "--name-only", branch], cwd=wt, check=False).stdout
+    return [x for x in out.splitlines() if x.strip()]
+
+
+def load_config(project):
+    cfg = json.loads(json.dumps(DEFAULTS))
+    user = read_json(Path(project) / STORE / "config.json", {}) or {}
+    for k, v in user.items():
+        if isinstance(v, dict) and isinstance(cfg.get(k), dict):
+            cfg[k].update(v)
+        else:
+            cfg[k] = v
+    return cfg
+
+
+def project_root(start=None):
+    if os.environ.get("COORD_PROJECT"):
+        return Path(os.environ["COORD_PROJECT"])
+    r = run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=start or os.getcwd(), check=False)
+    if r.returncode:
+        raise Fail("not inside a git repository")
+    return Path(r.stdout.strip()).parent
+
+
+# ---------------------------------------------------------------- the run
+
+class Run:
+    def __init__(self, project, name):
+        self.project = Path(project).resolve()
+        self.name = name
+        self.dir = self.project / STORE / name
+        key = hashlib.sha1(str(self.project).encode()).hexdigest()[:6]
+        self.brain = HOME / "runs" / ("%s-%s--%s" % (slug(self.project.name, 24), key, name))
+        self.cfg = load_config(self.project)
+
+    @property
+    def tasks_file(self):
+        return self.dir / "tasks.json"
+
+    def load(self):
+        data = read_json(self.tasks_file)
+        if data is None:
+            raise Fail("no coordinator named %r in %s" % (self.name, self.project / STORE))
+        return data
+
+    @contextmanager
+    def edit(self):
+        with open(self.dir / ".lock", "a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            data = self.load()
+            yield data
+            data["updated"] = now()
+            write_json(self.tasks_file, data)
+
+    def state(self):
+        return read_json(self.brain / "run.json", {}) or {}
+
+    def set_state(self, **kw):
+        self.brain.mkdir(parents=True, exist_ok=True)
+        with open(self.brain / ".lock", "a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            st = self.state()
+            st.update(kw)
+            write_json(self.brain / "run.json", st)
+            return st
+
+    def task_dir(self, tid):
+        return self.dir / "tasks" / tid
+
+    def task_branch(self, tid):
+        return "coord-tasks/%s/%s" % (self.name, tid)
+
+    def wt(self, tid):
+        return self.brain / "wt" / tid
+
+    def poke(self):
+        self.brain.mkdir(parents=True, exist_ok=True)
+        (self.brain / "poke").write_text(now())
+
+    def log(self, msg):
+        (self.brain / "logs").mkdir(parents=True, exist_ok=True)
+        with open(self.brain / "logs" / "scheduler.log", "a") as f:
+            f.write("%s %s\n" % (now(), msg))
+
+
+def list_runs(project):
+    base = Path(project) / STORE
+    if not base.is_dir():
+        return []
+    return [Run(project, p.name) for p in sorted(base.iterdir()) if (p / "tasks.json").exists()]
+
+
+def pick_run(name=None):
+    if os.environ.get("COORD_RUN_DIR") and not name:
+        p = Path(os.environ["COORD_RUN_DIR"])
+        return Run(p.parent.parent, p.name)
+    project = project_root()
+    if name:
+        r = Run(project, name)
+        r.load()
+        return r
+    runs = list_runs(project)
+    if not runs:
+        raise Fail("no coordinator in this project yet; start one with /coordinate <request>")
+    live = [r for r in runs if r.load().get("status") not in ("finished", "planned")] or runs
+    return max(live, key=lambda r: r.load().get("updated", ""))
+
+
+def find(data, tid):
+    for t in data["tasks"]:
+        if t["id"] == tid:
+            return t
+    raise Fail("no task %s" % tid)
+
+
+def new_task(tid, title, type_="build", deps=None, files=None, size="M", model="", effort=""):
+    return {"id": tid, "title": title, "type": type_, "status": "queue", "depends_on": deps or [],
+            "files": files or [], "size": size, "model": model, "effort": effort, "attempts": 0,
+            "session": "", "question": "", "question_kind": "", "answer": "", "qa": [], "inbox": [],
+            "resume": False, "resume_msg": "", "audit_round": 0, "audit_verdict": "", "audit_file": "",
+            "tests": False, "merged": False, "merge_state": "", "started": "", "finished": "", "minutes": 0.0,
+            "tokens": 0, "cost": 0.0}
+
+
+def next_id(data, prefix="T"):
+    nums = [int(m.group(1)) for t in data["tasks"] for m in [re.match(prefix + r"(\d+)$", t["id"])] if m]
+    return "%s%d" % (prefix, max(nums) + 1 if nums else 1)
+
+
+def deps_met(t, by):
+    for d in t["depends_on"]:
+        dep = by.get(d)
+        if not dep or dep["status"] not in ("done", "skipped"):
+            return False
+        if dep["type"] in WORK and dep["status"] == "done" and not dep.get("merged"):
+            return False
+    return True
+
+
+def _prefix(p):
+    p = p.strip()
+    p = p[2:] if p.startswith("./") else p
+    m = re.search(r"[*?\[]", p)
+    return p[:m.start()] if m else p
+
+
+def overlap(a, b):
+    fa, fb = a.get("files") or [], b.get("files") or []
+    if not fa or not fb:
+        return True
+    for x in map(_prefix, fa):
+        for y in map(_prefix, fb):
+            if not x or not y or x.startswith(y) or y.startswith(x):
+                return True
+    return False
+
+
+def derive_status(data, running=False):
+    if data.get("status") == "paused":
+        return "paused"
+    tasks = data["tasks"]
+    if any(t["status"] == "waiting_on_you" for t in tasks):
+        return "waiting_on_you"
+    plans_open = [t for t in tasks if t["type"] == "plan" and t["status"] in OPEN]
+    if not data.get("plan_approved"):
+        return "planning" if plans_open or running else "waiting_on_you"
+    if plans_open or running:
+        return "running"
+    if data.get("mode") == "plan":
+        return "planned"
+    if any(t["status"] in OPEN for t in tasks if t["type"] != "plan"):
+        return "running"
+    if any(t["type"] in WORK and t["status"] == "done" and not t.get("merged") for t in tasks):
+        return "running"
+    return "finished"
+
+
+def summary(data, scheduler_alive=None):
+    tasks = [t for t in data["tasks"] if t["type"] in WORK]
+    done = sum(1 for t in tasks if t["status"] in ("done", "skipped"))
+    active = [t["id"] for t in data["tasks"] if t["status"] in ("in_progress", "review", "audit")]
+    waiting = [t["id"] for t in data["tasks"] if t["status"] == "waiting_on_you"]
+    tok = sum(t.get("tokens", 0) for t in data["tasks"])
+    mins = sum(t.get("minutes", 0) for t in data["tasks"])
+    parts = ["%s: %s" % (data["name"], data["status"].replace("_", " "))]
+    if tasks:
+        parts.append("%d/%d tasks done" % (done, len(tasks)))
+    if active:
+        parts.append("working: " + ", ".join(active))
+    if waiting:
+        parts.append("waiting on you: " + ", ".join(waiting))
+    if not data.get("plan_approved") and data["status"] == "waiting_on_you" and not waiting:
+        parts.append("the plan waits for your approval")
+    parts.append("%s agent time, %s tokens" % (human_minutes(mins), human_tokens(tok)))
+    if scheduler_alive is False and data["status"] in ("running", "planning"):
+        parts.append("scheduler is not running - use `coord resume`")
+    return " · ".join(parts)
+
+
+# ---------------------------------------------------------------- agents
+
+def role_of(t):
+    return {"plan": "planner", "shots": "shooter"}.get(t["type"], "builder")
+
+
+def role_prompt(role):
+    return (ROOT / "roles" / ("%s.md" % role)).read_text()
+
+
+def session_exists(sid):
+    return bool(sid) and any((Path.home() / ".claude" / "projects").glob("*/%s.jsonl" % sid))
+
+
+def write_agent_files(r):
+    r.brain.mkdir(parents=True, exist_ok=True)
+    agents = {"coord-reviewer": {
+        "description": "Fresh code reviewer for one coordinator task: reads the task's knowledge file, "
+                       "its changes.md and the diff, then writes review.md.",
+        "prompt": role_prompt("reviewer"),
+        "model": r.cfg["models"]["reviewer"]}}
+    write_json(r.brain / "agents.json", agents)
+    hook = '"%s" "%s" _hook' % (sys.executable, ROOT / "bin" / "coord")
+    settings = {"permissions": {"deny": list(r.cfg["deny"])},
+                "hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": hook}]}]}}
+    write_json(r.brain / "settings.json", settings)
+
+
+def agent_env(r, tid, role, cwd):
+    env = dict(os.environ)
+    env.update(COORD_PROJECT=str(r.project), COORD_RUN_DIR=str(r.dir), COORD_TASK=tid, COORD_ROLE=role,
+               COORD_WT=str(cwd), PATH="%s%s%s" % (ROOT / "bin", os.pathsep, env.get("PATH", "")))
+    return env
+
+
+def ensure_branch(r, data):
+    if not git(r.project, "branch", "--list", data["branch"]):
+        git(r.project, "branch", data["branch"], data["base"])
+
+
+def setup_worktree(r, wt):
+    if not r.cfg.get("setup"):
+        return
+    (r.brain / "logs").mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, COORD_MAIN=str(r.project), COORD_WT=str(wt))
+    res = subprocess.run(r.cfg["setup"], shell=True, cwd=str(wt), env=env, capture_output=True, text=True)
+    (r.brain / "logs" / ("setup-%s.log" % wt.name)).write_text(res.stdout + res.stderr)
+
+
+def ensure_run_wt(r, data):
+    ensure_branch(r, data)
+    wt = r.wt("_run")
+    if not wt.exists():
+        wt.parent.mkdir(parents=True, exist_ok=True)
+        git(r.project, "worktree", "add", str(wt), data["branch"])
+        setup_worktree(r, wt)
+    return wt
+
+
+def prepare_worktree(r, data, t):
+    ensure_run_wt(r, data)
+    wt, br = r.wt(t["id"]), r.task_branch(t["id"])
+    if wt.exists():
+        return wt
+    if git(r.project, "branch", "--list", br):
+        git(r.project, "worktree", "add", str(wt), br)
+    else:
+        git(r.project, "worktree", "add", "-b", br, str(wt), data["branch"])
+    setup_worktree(r, wt)
+    patch = r.task_dir(t["id"]) / "wip.patch"
+    if nonempty(patch):
+        res = run(["git", "apply", "--3way", "--whitespace=nowarn", patch], cwd=wt, check=False)
+        r.log("%s: applied saved work (%s)" % (t["id"], "ok" if res.returncode == 0 else res.stderr.strip()[-200:]))
+        patch.rename(patch.with_suffix(".patch.applied"))
+    return wt
+
+
+def first_prompt(r, data, t, role, cwd):
+    kd = r.task_dir(t["id"])
+    lines = ["You are the %s for task %s (%s) in the coordinator run '%s'." % (ROLE_NAMES[role], t["id"], t["title"], r.name),
+             "Run folder: %s" % r.dir,
+             "Your knowledge file: %s - read it first, in full." % (kd / "knowledge.md")]
+    if role == "planner":
+        if data.get("owner_notes"):
+            lines += ["The owner has added to the request since:", owner_words(data).split("\n", 1)[1]]
+        lines += ["Project: %s (base branch %s). Project config: %s" % (r.project, data["base"], r.project / STORE / "config.json"),
+                  "Write the plan to: %s" % (r.dir / "plan.md"),
+                  "Mode: %s" % ("plan only - milestones and tasks for later runs; nothing gets built now"
+                                if data["mode"] == "plan" else "build - the tasks are built right after the owner approves")]
+    elif role == "builder":
+        gate = r.cfg.get("gate") or "none configured - run the project's own checks for the area you touched"
+        lines += ["Your worktree (work only here): %s, on branch %s, made from the run branch %s." % (cwd, r.task_branch(t["id"]), data["branch"]),
+                  "Write your changes file to: %s" % (kd / "changes.md"),
+                  "Your reviewer writes to: %s" % (kd / "review.md"),
+                  "Gate: %s (run it from %s in your worktree)." % (gate, r.cfg.get("gate_cwd", ".")),
+                  "Tests for this task: %s" % ("ON - the owner asked for tests; write only the few the knowledge file names, short and to the point."
+                                               if t.get("tests") else "OFF - don't add, change or delete any test file. If an existing test breaks because of your change, ask the owner with `coord task ask` instead of editing it.")]
+    elif role == "shooter":
+        lines += ["Plan: %s" % (r.dir / "plan.md")]
+    if nonempty(kd / "resume.md"):
+        lines.append("Resume note from an earlier session: %s - read it after the knowledge file." % (kd / "resume.md"))
+    if (kd / "wip.patch.applied").exists():
+        lines.append("Work saved by an earlier session was applied to your worktree; check `git status` first.")
+    if t.get("qa"):
+        lines.append("Earlier questions and the owner's answers:")
+        lines += ["- Q: %s\n  A: %s" % (x["q"], x["a"]) for x in t["qa"]]
+    if t.get("resume_msg"):
+        lines.append(t["resume_msg"])
+    lines.append("`coord task show` prints your task. Follow your role instructions exactly.")
+    return "\n".join(lines)
+
+
+def audit_prompt(r, data, t):
+    rnd = t["audit_round"]
+    tests_line = []
+    if t["type"] == "plan":
+        report = r.dir / ("plan-audit-%d.md" % rnd)
+        what = ["Audit the PLAN (round %d)." % rnd,
+                "Plan: %s" % (r.dir / "plan.md"),
+                "Tasks: run `coord task list`. Each task's brief: %s/<id>/knowledge.md" % (r.dir / "tasks")]
+    else:
+        report = r.task_dir(t["id"]) / ("audit-%d.md" % rnd)
+        what = ["Audit the FINISHED TASK %s (%s), round %d." % (t["id"], t["title"], rnd),
+                "Plan: %s" % (r.dir / "plan.md"),
+                "The task's brief: %s" % (r.task_dir(t["id"]) / "knowledge.md"),
+                "What the builder says it changed: %s" % (r.task_dir(t["id"]) / "changes.md"),
+                "The files it changed: run `git -C \"%s\" diff --stat %s`" % (r.wt(t["id"]), data["branch"])]
+        if r.wt(t["id"]).exists():
+            tests = [f for f in changed_files(r.wt(t["id"]), data["branch"]) if is_test_file(r.cfg, f)]
+            tests_line = ["Test files this change adds or modifies: %s. Tests for this task are %s."
+                          % (", ".join(tests) or "none", "ON (the planner says the owner asked)" if t.get("tests") else "OFF")]
+    if rnd > 1:
+        what.append("Your earlier reports are next to this one; check that what they asked for was done.")
+    return "\n".join(["You are the hallucination officer of the coordinator run '%s'." % r.name,
+                      "Everything the owner has asked for, word for word (the request, then later additions and answers):",
+                      "<<<", owner_words(data), ">>>"] + what + tests_line +
+                     ["Write your report to: %s" % report,
+                      "Then run `coord audit approve --file \"%s\"` or `coord audit revise --file \"%s\"`, and end your turn." % (report, report)])
+
+
+class Job:
+    def __init__(self, kind, tid, role, proc, out_path, err_file):
+        self.kind, self.tid, self.role, self.p = kind, tid, role, proc
+        self.out_path, self.err = out_path, err_file
+        self.t0 = time.time()
+
+
+def start_job(r, kind, tid):
+    data = r.load()
+    t = find(data, tid)
+    cfg = r.cfg
+    logs = r.brain / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    n = len(list(logs.glob("%s-*.json" % tid))) + 1
+    if kind == "audit":
+        role = "officer"
+        with r.edit() as d:
+            tt = find(d, tid)
+            tt["audit_round"] += 1
+            tt["audit_verdict"] = ""
+            t = dict(tt)
+        cwd = r.project
+        model = cfg["models"]["officer"]
+        effort = cfg["efforts"]["officer"] if t["type"] == "plan" else cfg["efforts"].get("officer_task", "medium")
+        cmd = [cfg["claude"], "-p", "--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
+               "--settings", r.brain / "settings.json", "--output-format", "json", "-n", "%s:%s:officer" % (r.name, tid),
+               "--append-system-prompt", role_prompt("officer"), "--session-id", str(uuid.uuid4()),
+               audit_prompt(r, data, t)]
+    else:
+        role = role_of(t)
+        cwd = prepare_worktree(r, data, t) if role == "builder" else r.project
+        with r.edit() as d:
+            tt = find(d, tid)
+            answer = tt.get("answer", "")
+            if answer:
+                tt["qa"].append({"q": tt.get("question", ""), "a": answer})
+            resume = bool(tt.get("resume") and session_exists(tt.get("session")))
+            sid = tt["session"] if resume else str(uuid.uuid4())
+            if resume:
+                prompt = ("The owner answered your question: %s" % answer) if answer else (
+                    tt.get("resume_msg") or "Continue from where you stopped, then finish the task.")
+            else:
+                prompt = first_prompt(r, d, tt, role, cwd)
+            tt.update(status="in_progress", session=sid, resume=False, resume_msg="", answer="", question="",
+                      question_kind="", started=tt["started"] or now())
+            t = dict(tt)
+        model = t.get("model") or cfg["models"][role]
+        effort = t.get("effort") or cfg["efforts"][role]
+        cmd = [cfg["claude"], "-p", "--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
+               "--settings", r.brain / "settings.json", "--output-format", "json", "-n", "%s:%s" % (r.name, tid),
+               "--append-system-prompt", role_prompt(role)]
+        if role == "builder":
+            cmd += ["--agents", r.brain / "agents.json"]
+        cmd += (["--resume", sid] if resume else ["--session-id", sid]) + [prompt]
+    out_path = logs / ("%s-%d.json" % (tid, n))
+    out = open(out_path, "w")
+    err = open(logs / ("%s-%d.err" % (tid, n)), "w")
+    proc = subprocess.Popen([str(c) for c in cmd], cwd=str(cwd), env=agent_env(r, tid, role, cwd),
+                            stdout=out, stderr=err, stdin=subprocess.DEVNULL, start_new_session=True)
+    out.close()
+    r.log("started %s %s (%s, pid %d)" % (role, tid, kind, proc.pid))
+    return Job(kind, tid, role, proc, out_path, err)
+
+
+def usage_of(out):
+    if not out:
+        return 0, 0.0
+    mu = out.get("modelUsage") or {}
+    if mu:
+        tok = sum(m.get("inputTokens", 0) + m.get("outputTokens", 0) + m.get("cacheReadInputTokens", 0)
+                  + m.get("cacheCreationInputTokens", 0) for m in mu.values())
+    else:
+        u = out.get("usage") or {}
+        tok = sum(u.get(k) or 0 for k in ("input_tokens", "output_tokens", "cache_read_input_tokens",
+                                           "cache_creation_input_tokens"))
+    return tok, float(out.get("total_cost_usd") or 0.0)
+
+
+def finish_job(r, job):
+    job.err.close()
+    out = read_json(job.out_path, None) if job.out_path.exists() and job.out_path.stat().st_size else None
+    tok, cost = usage_of(out)
+    rounds = int(r.cfg["officer"].get("max_rounds", 3))
+    with r.edit() as d:
+        t = find(d, job.tid)
+        t["minutes"] = round(t.get("minutes", 0) + (time.time() - job.t0) / 60, 1)
+        t["tokens"] = t.get("tokens", 0) + tok
+        t["cost"] = round(t.get("cost", 0) + cost, 4)
+        if job.kind == "audit":
+            if t["status"] != "audit":
+                pass
+            elif t["audit_verdict"] == "approve":
+                t["status"] = "done"
+            elif t["audit_verdict"] == "revise":
+                if t["audit_round"] >= rounds:
+                    t["status"] = "waiting_on_you"
+                    t["question_kind"] = "officer"
+                    t["question"] = ("The hallucination officer still asks for changes after %d rounds (last report: %s). "
+                                     "Accept it as it is, or reply with what to change." % (t["audit_round"], t["audit_file"]))
+                else:
+                    t["status"] = "queue"
+                    t["resume"] = True
+                    t["resume_msg"] = ("The hallucination officer checked your work and asks for changes. Read its report "
+                                       "at %s, fix what it asks (or explain in your files why not), then run "
+                                       "`coord task done` again." % t["audit_file"])
+            else:
+                t["audit_round"] -= 1
+                t["audit_fail"] = t.get("audit_fail", 0) + 1
+                if t["audit_fail"] >= 2:
+                    t["status"] = "waiting_on_you"
+                    t["question_kind"] = "officer"
+                    t["question"] = "The officer could not finish its check. Accept the work as it is, or reply with what to do."
+        elif t["status"] in ("in_progress", "review"):
+            t["attempts"] += 1
+            last = (out or {}).get("result") or "(no result; exit %s)" % job.p.returncode
+            if t["attempts"] < 2:
+                t["status"] = "queue"
+                t["resume"] = True
+                t["resume_msg"] = "Your session ended before the task was done. Check where you are, then finish the task."
+            else:
+                t["status"] = "waiting_on_you"
+                t["question_kind"] = "stalled"
+                t["question"] = "%s stopped twice without finishing. Its last words: %s - retry it, stop it, or reply with guidance." % (job.tid, str(last)[:400])
+    r.log("finished %s %s (exit %s, %s tokens)" % (job.role, job.tid, job.p.returncode, tok))
+
+
+def commit_all(wt, msg):
+    git(wt, "add", "-A")
+    merging = (Path(git(wt, "rev-parse", "--absolute-git-dir")) / "MERGE_HEAD").exists()
+    if not git(wt, "status", "--porcelain") and not merging:
+        return False
+    ident = [] if git(wt, "config", "user.email", check=False) else ["-c", "user.name=coordinator", "-c", "user.email=coordinator@localhost"]
+    run(["git", *ident, "commit", "--no-verify", "-m", msg], cwd=wt)
+    return True
+
+
+def add_fix(r, parent, kind, detail):
+    with r.edit() as d:
+        p = find(d, parent)
+        p["merge_state"] = "fixing"
+        fid, n = "%s-%s" % (parent, kind), 2
+        while any(t["id"] == fid for t in d["tasks"]):
+            fid, n = "%s-%s%d" % (parent, kind, n), n + 1
+        title = ("Resolve the merge of %s into the run branch" if kind == "merge" else "Fix the gate after merging %s") % parent
+        t = new_task(fid, title, "merge" if kind == "merge" else "build", files=p["files"], size="S",
+                     model=p.get("model", ""), effort=p.get("effort", ""))
+        t["parent"] = parent
+        d["tasks"].append(t)
+        branch = d["branch"]
+    kd = r.task_dir(fid)
+    kd.mkdir(parents=True, exist_ok=True)
+    pk = r.task_dir(parent)
+    if kind == "merge":
+        body = ("Task %s could not be merged into the run branch `%s` automatically.\n\n"
+                "In your worktree (a branch made from the run branch) run `git merge --no-commit %s`, resolve every "
+                "conflict keeping the intent of both sides, then run the gate. Don't commit: the scheduler does.\n\n"
+                "The parent task's brief: %s\nIts changes: %s\n\n%s\n"
+                % (parent, branch, r.task_branch(parent), pk / "knowledge.md", pk / "changes.md", detail))
+    else:
+        body = ("After task %s was merged into the run branch `%s`, the gate fails. Your worktree is made from the "
+                "run branch, so it already holds %s's changes. Make the gate pass with the smallest correct fix.\n\n"
+                "The parent task's brief: %s\nIts changes: %s\n\nGate output (tail):\n\n```\n%s\n```\n"
+                % (parent, branch, parent, pk / "knowledge.md", pk / "changes.md", detail))
+    (kd / "knowledge.md").write_text("# %s - %s\n\n%s" % (fid, title, body))
+    r.log("added %s" % fid)
+
+
+def integrate(r, tid):
+    data = r.load()
+    t = find(data, tid)
+    wt = r.wt(tid)
+    runwt = ensure_run_wt(r, data)
+    if wt.exists():
+        commit_all(wt, "%s: %s" % (tid, t["title"]))
+    res = run(["git", "merge", "--no-ff", "--no-edit", "-m", "Merge %s: %s" % (tid, t["title"]), r.task_branch(tid)],
+              cwd=runwt, check=False)
+    if res.returncode:
+        run(["git", "merge", "--abort"], cwd=runwt, check=False)
+        add_fix(r, tid, "merge", (res.stdout + res.stderr).strip()[-1500:])
+        return
+    ok, logf = True, None
+    if r.cfg.get("gate"):
+        logf = r.brain / "logs" / ("gate-%s.log" % tid)
+        with open(logf, "w") as f:
+            ok = subprocess.run(r.cfg["gate"], shell=True, cwd=str(runwt / r.cfg.get("gate_cwd", ".")),
+                                stdout=f, stderr=subprocess.STDOUT).returncode == 0
+    if not ok:
+        add_fix(r, tid, "gate", "\n".join(logf.read_text().splitlines()[-60:]))
+        return
+    with r.edit() as d:
+        tt = find(d, tid)
+        tt["merged"], tt["merge_state"] = True, ""
+        if tt.get("parent"):
+            p = find(d, tt["parent"])
+            p["merged"], p["merge_state"] = True, ""
+    if wt.exists():
+        run(["git", "worktree", "remove", "--force", wt], cwd=r.project, check=False)
+    r.log("merged %s" % tid)
+    if r.cfg.get("pr"):
+        sync_pr(r)
+
+
+def pr_body(data):
+    rows = ["| %s | %s | %s | %s | %s |" % (t["id"], t["title"], t["status"].replace("_", " "),
+                                            human_minutes(t.get("minutes")), human_tokens(t.get("tokens")))
+            for t in data["tasks"] if t["type"] in WORK]
+    return "\n".join(["## Request", "", data["request"], "", "## Tasks", "",
+                      "| id | task | status | time | tokens |", "|---|---|---|---|---|"] + rows +
+                     ["", "_Kept up to date by coord._"])
+
+
+def sync_pr(r):
+    data = r.load()
+    if not r.cfg.get("push"):
+        return
+    run(["git", "push", "-u", "origin", data["branch"]], cwd=r.project, check=False)
+    body = r.brain / "pr-body.md"
+    body.write_text(pr_body(data))
+    exists = run(["gh", "pr", "view", data["branch"], "--json", "number"], cwd=r.project, check=False).returncode == 0
+    if exists:
+        run(["gh", "pr", "edit", data["branch"], "--body-file", body], cwd=r.project, check=False)
+    else:
+        run(["gh", "pr", "create", "--draft", "--head", data["branch"], "--base", data["base"],
+             "--title", data["name"], "--body-file", body], cwd=r.project, check=False)
+
+
+def next_jobs(r, data, jobs):
+    tasks = data["tasks"]
+    by = {t["id"]: t for t in tasks}
+    busy = {j.tid for j in jobs.values()}
+    out = [("audit", t["id"]) for t in tasks if t["status"] == "audit" and t["id"] not in busy]
+    if not any(by[x]["type"] == "plan" for x in busy if x in by):
+        for t in tasks:
+            if t["type"] == "plan" and t["status"] == "queue" and deps_met(t, by):
+                out.append(("work", t["id"]))
+                break
+    out += [("work", t["id"]) for t in tasks if t["type"] == "shots" and t["status"] == "queue" and t["id"] not in busy]
+    if data.get("plan_approved") and data.get("mode") == "build":
+        running = [by[x] for x in busy if x in by and by[x]["type"] in WORK]
+        slots = max(1, int(r.cfg["max_parallel"])) - len(running)
+        for t in tasks:
+            if slots <= 0:
+                break
+            if t["type"] in WORK and t["status"] == "queue" and t["id"] not in busy and deps_met(t, by) \
+                    and not any(overlap(t, b) for b in running):
+                out.append(("work", t["id"]))
+                running.append(t)
+                slots -= 1
+    return out
+
+
+def sleep_poke(r, secs):
+    poke = r.brain / "poke"
+    before = poke.stat().st_mtime if poke.exists() else 0
+    end = time.time() + secs
+    while time.time() < end:
+        time.sleep(0.25)
+        if poke.exists() and poke.stat().st_mtime != before:
+            return
+
+
+def cmd_scheduler(a):
+    r = Run(a.project, a.run)
+    (r.brain / "logs").mkdir(parents=True, exist_ok=True)
+    other = r.state().get("scheduler_pid")
+    if other and other != os.getpid() and alive(other):
+        return
+    r.set_state(scheduler_pid=os.getpid(), agents={})
+    write_agent_files(r)
+    stop = []
+    signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
+    with r.edit() as d:
+        for t in d["tasks"]:
+            if t["status"] in ("in_progress", "review"):
+                t["status"], t["resume"] = "queue", True
+                t["resume_msg"] = "Your session was interrupted. Check what is already done, then continue and finish the task."
+    jobs, announced = {}, None
+    r.log("scheduler up (pid %d)" % os.getpid())
+    while not stop:
+        for key, job in list(jobs.items()):
+            if job.p.poll() is not None:
+                jobs.pop(key)
+                try:
+                    finish_job(r, job)
+                except Exception as e:  # keep scheduling; surface it on the task
+                    r.log("finish %s failed: %r" % (key, e))
+        data = r.load()
+        if data.get("terminating"):
+            break
+        if data["status"] != "paused":
+            for t in data["tasks"]:
+                if t["type"] in WORK and t["status"] == "done" and not t.get("merged") and t.get("merge_state") != "fixing":
+                    try:
+                        integrate(r, t["id"])
+                    except Exception as e:
+                        r.log("integrate %s failed: %r" % (t["id"], e))
+                        with r.edit() as d:
+                            tt = find(d, t["id"])
+                            tt.update(status="waiting_on_you", question_kind="stalled",
+                                      question="Merging %s into the run branch failed: %s" % (t["id"], e))
+            data = r.load()
+            for kind, tid in next_jobs(r, data, jobs):
+                key = "%s:%s" % (kind, tid)
+                if key in jobs:
+                    continue
+                try:
+                    jobs[key] = start_job(r, kind, tid)
+                except Exception as e:
+                    r.log("start %s failed: %r" % (key, e))
+                    with r.edit() as d:
+                        tt = find(d, tid)
+                        tt.update(status="waiting_on_you", question_kind="stalled",
+                                  question="Could not start %s: %s" % (tid, e))
+        with r.edit() as d:
+            d["status"] = derive_status(d, bool(jobs))
+            status = d["status"]
+            data = d
+        if status != announced:
+            r.log("status %s" % status)
+            if status in WAIT_STATES and announced is not None:
+                notify("coord · %s" % r.name, summary(data))
+            announced = status
+        r.set_state(agents={k: {"pid": j.p.pid, "task": j.tid, "role": j.role, "kind": j.kind,
+                                "since": dt.datetime.fromtimestamp(j.t0).astimezone().isoformat(timespec="seconds")}
+                            for k, j in jobs.items()})
+        if not jobs and status in ("finished", "planned", "paused"):
+            if status == "finished" and r.cfg.get("pr"):
+                sync_pr(r)
+            break
+        sleep_poke(r, 2.0)
+    for job in jobs.values():
+        kill_group(job.p.pid)
+    r.set_state(scheduler_pid=0, agents={})
+    r.log("scheduler down")
+
+
+def start_daemon(r, which):
+    key = "%s_pid" % which
+    if alive(r.state().get(key)):
+        return False
+    (r.brain / "logs").mkdir(parents=True, exist_ok=True)
+    log = open(r.brain / "logs" / ("%s.out" % which), "a")
+    subprocess.Popen([sys.executable, str(ROOT / "bin" / "coord"), "_%s" % which, "--project", str(r.project), "--run", r.name],
+                     cwd=str(r.project), stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                     start_new_session=True)
+    log.close()
+    if which == "viewer":
+        for _ in range(40):
+            if alive(r.state().get("viewer_pid")) and r.state().get("viewer_port"):
+                break
+            time.sleep(0.1)
+    return True
+
+
+def viewer_url(r):
+    port = r.state().get("viewer_port")
+    return "http://127.0.0.1:%s/" % port if port else ""
+
+
+# ---------------------------------------------------------------- owner commands
+
+def cmd_start(a):
+    project = project_root()
+    request = Path(a.request_file).read_text() if a.request_file else " ".join(a.request or [])
+    if not request.strip():
+        raise Fail("empty request")
+    name = slug(a.name or " ".join(request.split()[:6]))
+    r = Run(project, name)
+    if r.tasks_file.exists():
+        raise Fail("a coordinator named %r already exists here; pick another name, or `coord resume %s`" % (name, name))
+    if not shutil.which(r.cfg["claude"]):
+        raise Fail("`%s` is not on PATH" % r.cfg["claude"])
+    ensure_store(project)
+    base = r.cfg["base_branch"] or git(project, "rev-parse", "--abbrev-ref", "HEAD")
+    data = {"name": name, "request": request.strip(), "mode": "plan" if a.plan_only else "build",
+            "status": "planning", "plan_approved": False, "base": base, "branch": a.branch or "coord/%s" % name,
+            "created": now(), "updated": now(), "tasks": [new_task("T0", "Plan the work", "plan")]}
+    (r.task_dir("T0")).mkdir(parents=True)
+    write_json(r.tasks_file, data)
+    (r.task_dir("T0") / "knowledge.md").write_text(
+        "# T0 - Plan the work\n\n## The owner's request, word for word\n\n%s\n\n## Mode\n\n%s\n" % (
+            request.strip(), "Plan only: goals, milestones and tasks that later runs will build."
+            if a.plan_only else "Build: the owner approves your plan, then the tasks are built."))
+    start_daemon(r, "scheduler")
+    start_daemon(r, "viewer")
+    url = viewer_url(r)
+    if url and not a.no_open:
+        open_url(url)
+    print("started %s - planning. Live page: %s" % (name, url or "(viewer failed to start)"))
+
+
+def ensure_store(project):
+    store = project / STORE
+    store.mkdir(exist_ok=True)
+    exclude = Path(git(project, "rev-parse", "--path-format=absolute", "--git-common-dir")) / "info" / "exclude"
+    exclude.parent.mkdir(exist_ok=True)
+    text = exclude.read_text() if exclude.exists() else ""
+    if "/%s/" % STORE not in text.split("\n"):
+        exclude.write_text(text + ("" if text.endswith("\n") or not text else "\n") + "/%s/\n" % STORE)
+    cfg = store / "config.json"
+    if not cfg.exists():
+        write_json(cfg, {"base_branch": "", "gate": "", "gate_cwd": ".", "setup": "",
+                         "dev": {"command": "", "cwd": ".", "ready_path": "/"}, "max_parallel": 3})
+
+
+def cmd_status(a):
+    r = pick_run(a.run)
+    data = r.load()
+    if a.text:
+        print_status_text(r, data)
+        return
+    start_daemon(r, "viewer")
+    url = viewer_url(r)
+    if url and not a.no_open:
+        open_url(url)
+    print(summary(data, alive(r.state().get("scheduler_pid"))) + (" · %s" % url if url else ""))
+
+
+def print_status_text(r, data):
+    print(summary(data, alive(r.state().get("scheduler_pid"))))
+    url = viewer_url(r)
+    if url:
+        print("live page: %s" % url)
+    for t in data["tasks"]:
+        if t["status"] == "waiting_on_you":
+            print("QUESTION %s (%s): %s" % (t["id"], t.get("question_kind") or "agent", t.get("question")))
+    if not data.get("plan_approved") and data["status"] == "waiting_on_you":
+        plan = r.dir / "plan.md"
+        print("PLAN READY: %s" % plan)
+        if plan.exists():
+            keep, out = False, []
+            for line in plan.read_text().splitlines():
+                if line.startswith("## "):
+                    keep = line[3:].strip().lower() in ("goal", "questions for the owner", "out of scope")
+                if keep:
+                    out.append(line)
+            print("\n".join(out[:60]))
+        print("TASKS:")
+        for t in data["tasks"]:
+            if t["type"] in WORK and t["status"] != "skipped":
+                print("  %s %s [%s, %s/%s%s] after: %s" % (t["id"], t["title"], t["size"], t.get("model") or "default",
+                                                         t.get("effort") or "default", ", tests on" if t.get("tests") else "",
+                                                         ", ".join(t["depends_on"]) or "-"))
+    if data["status"] == "finished":
+        print("RUN BRANCH: %s (from %s)" % (data["branch"], data["base"]))
+        for t in data["tasks"]:
+            print("  %s %s - %s, %s, %s tokens" % (t["id"], t["title"], t["status"], human_minutes(t.get("minutes")),
+                                                  human_tokens(t.get("tokens"))))
+
+
+def cmd_wait(a):
+    r = pick_run(a.run)
+    while True:
+        data = r.load()
+        if data["status"] in WAIT_STATES:
+            break
+        if not alive(r.state().get("scheduler_pid")):
+            time.sleep(3)
+            if not alive(r.state().get("scheduler_pid")) and r.load()["status"] not in WAIT_STATES:
+                print("the scheduler stopped while the run was %s; `coord resume` restarts it" % r.load()["status"])
+                return
+        time.sleep(4)
+    print_status_text(r, r.load())
+
+
+def do_approve(r):
+    with r.edit() as d:
+        for t in d["tasks"]:
+            if t["type"] == "plan" and t["status"] in ("waiting_on_you", "audit"):
+                t["status"], t["question"], t["question_kind"] = "done", "", ""
+        if any(t["type"] == "plan" and t["status"] in OPEN for t in d["tasks"]):
+            raise Fail("the plan is not ready yet")
+        d["plan_approved"] = True
+        d["status"] = derive_status(d)
+    r.poke()
+    start_daemon(r, "scheduler")
+
+
+def do_answer(r, tid, text):
+    with r.edit() as d:
+        t = find(d, tid)
+        if t["status"] != "waiting_on_you":
+            raise Fail("%s is not waiting for an answer" % tid)
+        t.update(answer=text, status="queue", resume=True, attempts=0)
+        add_owner_note(d, "answer", text, tid)
+        if t.get("question_kind") == "officer":
+            t["audit_round"] = 0
+        d["status"] = derive_status(d)
+    r.poke()
+    start_daemon(r, "scheduler")
+
+
+def do_accept(r, tid):
+    with r.edit() as d:
+        t = find(d, tid)
+        if t["status"] not in ("waiting_on_you", "audit"):
+            raise Fail("%s has nothing to accept" % tid)
+        t.update(status="done", question="", question_kind="")
+        d["status"] = derive_status(d)
+    r.poke()
+    start_daemon(r, "scheduler")
+
+
+def do_pause(r):
+    with r.edit() as d:
+        d["status"] = "paused"
+    r.poke()
+
+
+def do_resume(r):
+    with r.edit() as d:
+        if d["status"] == "paused":
+            d["status"] = "running"
+        for t in d["tasks"]:
+            if t["status"] == "paused":
+                t.update(status="queue", resume=True,
+                         resume_msg="The run was resumed. Read your resume note (%s) and continue." % (r.task_dir(t["id"]) / "resume.md"))
+        d["status"] = derive_status(d)
+    start_daemon(r, "scheduler")
+    start_daemon(r, "viewer")
+
+
+def cmd_simple(a):
+    r = pick_run(a.run)
+    if a.cmd == "approve":
+        do_approve(r)
+        print("approved - building starts now" if r.load()["mode"] == "build" else "approved - the plan is saved; `coord run %s` builds it later" % r.name)
+    elif a.cmd == "accept":
+        do_accept(r, a.task)
+        print("accepted %s" % a.task)
+    elif a.cmd == "answer":
+        do_answer(r, a.task, " ".join(a.text))
+        print("answered %s - it continues now" % a.task)
+    elif a.cmd == "pause":
+        do_pause(r)
+        print("pausing %s: running agents write a resume note and stop" % r.name)
+    elif a.cmd == "resume":
+        do_resume(r)
+        print("resumed %s · %s" % (r.name, viewer_url(r)))
+    elif a.cmd == "run":
+        with r.edit() as d:
+            d["mode"] = "build"
+            d["status"] = derive_status(d)
+        start_daemon(r, "scheduler")
+        start_daemon(r, "viewer")
+        print("building %s · %s" % (r.name, viewer_url(r)))
+    elif a.cmd == "retry":
+        with r.edit() as d:
+            t = find(d, a.task)
+            t.update(status="queue", attempts=0, resume=False, question="", question_kind="", session="")
+            d["status"] = derive_status(d)
+        r.poke()
+        start_daemon(r, "scheduler")
+        print("retrying %s with a fresh agent" % a.task)
+    elif a.cmd == "stop":
+        with r.edit() as d:
+            find(d, a.task)["status"] = "skipped"
+            d["status"] = derive_status(d)
+        for job in (r.state().get("agents") or {}).values():
+            if job.get("task") == a.task:
+                kill_group(job.get("pid"))
+        r.poke()
+        print("stopped %s" % a.task)
+    elif a.cmd == "tell":
+        text = " ".join(a.text)
+        with r.edit() as d:
+            t = find(d, a.task)
+            live = t["status"] in ("in_progress", "review")
+            if live:
+                t["inbox"].append(text)
+            add_owner_note(d, "note", text, a.task)
+        if not live:
+            with open(r.task_dir(a.task) / "knowledge.md", "a") as f:
+                f.write("\n## Note from the owner (%s)\n\n%s\n" % (now()[:16], text))
+        print("delivered to %s at its next step" % a.task if live else "added to %s's brief" % a.task)
+
+
+def cmd_add(a):
+    r = pick_run(a.run)
+    text = " ".join(a.text)
+    with r.edit() as d:
+        add_owner_note(d, "addition", text)
+        planner = next((t for t in d["tasks"] if t["type"] == "plan" and session_exists(t.get("session"))), None)
+        if planner and planner["status"] in ("done", "waiting_on_you"):
+            planner.update(status="queue", resume=True, audit_round=0, question="", question_kind="",
+                           resume_msg="The owner asks for this change to the plan: \"%s\". Update plan.md, the tasks "
+                                      "and their knowledge files to match, then run `coord task done`." % text)
+            tid = planner["id"]
+        else:
+            tid = next_id(d, "P")
+            d["tasks"].append(new_task(tid, "Fit the owner's addition into the plan", "plan"))
+        d["plan_approved"] = False
+        d["status"] = derive_status(d)
+    if tid.startswith("P"):
+        r.task_dir(tid).mkdir(parents=True, exist_ok=True)
+        (r.task_dir(tid) / "knowledge.md").write_text(
+            "# %s - Fit the owner's addition into the plan\n\n## The addition, word for word\n\n%s\n\n"
+            "The current plan is plan.md; tasks are in tasks.json. Update the plan, add or change tasks and their "
+            "knowledge files. Don't touch tasks that are done.\n" % (tid, text))
+    r.poke()
+    start_daemon(r, "scheduler")
+    print("the planner is updating the plan; it comes back to you after the officer's check")
+
+
+def cmd_shots(a):
+    r = pick_run(a.run)
+    if not r.cfg["dev"].get("command"):
+        raise Fail("config.json has no dev.command, so there is no dev server to screenshot")
+    with r.edit() as d:
+        tid = next_id(d, "S")
+        d["tasks"].append(new_task(tid, "Before/after screenshots", "shots", size="S"))
+    r.task_dir(tid).mkdir(parents=True, exist_ok=True)
+    note = " ".join(a.note or []) or "Show what this run changed."
+    (r.task_dir(tid) / "knowledge.md").write_text("# %s - Before/after screenshots\n\n## The owner's note\n\n%s\n" % (tid, note))
+    r.poke()
+    start_daemon(r, "scheduler")
+    print("taking screenshots (%s); the PNG lands on your Desktop" % tid)
+
+
+def cmd_list(a):
+    runs = list_runs(project_root())
+    if not runs:
+        print("no coordinators in this project")
+    for r in runs:
+        print(summary(r.load(), alive(r.state().get("scheduler_pid"))))
+
+
+def cmd_terminate(a):
+    r = pick_run(a.run)
+    with r.edit() as d:
+        d["terminating"] = True
+    st = r.state()
+    kill_group(st.get("scheduler_pid"))
+    for job in (st.get("agents") or {}).values():
+        kill_group(job.get("pid"))
+    for pid in [st.get("viewer_pid")] + list(st.get("dev_pids") or []):
+        kill_group(pid)
+    data = r.load()
+    saved = []
+    for t in data["tasks"]:
+        wt = r.wt(t["id"])
+        if t["type"] in WORK and wt.exists() and not t.get("merged"):
+            git(wt, "add", "-A", check=False)
+            diff = run(["git", "diff", "--cached", "--binary", data["branch"]], cwd=wt, check=False).stdout
+            if diff.strip():
+                (r.task_dir(t["id"]) / "wip.patch").write_text(diff)
+                saved.append(t["id"])
+    wts = r.brain / "wt"
+    if wts.exists():
+        for wt in wts.iterdir():
+            run(["git", "worktree", "remove", "--force", wt], cwd=r.project, check=False)
+    run(["git", "worktree", "prune"], cwd=r.project, check=False)
+    for br in git(r.project, "branch", "--list", "coord-tasks/%s/*" % r.name, check=False).splitlines():
+        git(r.project, "branch", "-D", br.strip(" *+"), check=False)
+    shutil.rmtree(r.brain, ignore_errors=True)
+    with r.edit() as d:
+        d.pop("terminating", None)
+        for t in d["tasks"]:
+            if t["status"] in ("in_progress", "review", "audit"):
+                t["status"] = "paused"
+        d["status"] = "finished" if all(t["status"] in ("done", "skipped") for t in d["tasks"]) else "paused"
+        d["terminated"] = now()
+        data = d
+    lines = ["terminated %s - stopped its agents and live page, removed its worktrees, task branches and internal files." % r.name]
+    for t in data["tasks"]:
+        lines.append("  %s %s - %s, %s, %s tokens" % (t["id"], t["title"], t["status"], human_minutes(t.get("minutes")),
+                                                     human_tokens(t.get("tokens"))))
+    if git(r.project, "branch", "--list", data["branch"], check=False):
+        lines.append("Kept: the run branch %s." % data["branch"])
+    if saved:
+        lines.append("Unfinished work saved as wip.patch in: %s" % ", ".join(saved))
+    if a.purge:
+        shutil.rmtree(r.dir, ignore_errors=True)
+        lines.append("Purged the knowledge folder %s." % r.dir)
+    else:
+        lines.append("Kept the knowledge in %s for later coordinators." % r.dir)
+    print("\n".join(lines))
+
+
+# ---------------------------------------------------------------- agent commands
+
+def agent_ctx():
+    rd, tid = os.environ.get("COORD_RUN_DIR"), os.environ.get("COORD_TASK")
+    if not rd or not tid:
+        raise Fail("`coord task` and `coord audit` are for agents started by the coordinator")
+    p = Path(rd)
+    return Run(p.parent.parent, p.name), tid, os.environ.get("COORD_ROLE", "")
+
+
+def cmd_task(a):
+    r, tid, role = agent_ctx()
+    act = a.action
+    if act == "show":
+        t = find(r.load(), tid)
+        print(json.dumps(t, indent=2))
+        print("files: %s" % ", ".join(str(r.task_dir(tid) / f) for f in TASK_FILES))
+        return
+    if act == "list":
+        for t in r.load()["tasks"]:
+            print("%s [%s/%s] %s | after: %s | files: %s | %s/%s, size %s | tests %s" % (
+                t["id"], t["type"], t["status"], t["title"], ",".join(t["depends_on"]) or "-",
+                ",".join(t["files"]) or "-", t.get("model") or "default", t.get("effort") or "default", t["size"],
+                "on" if t.get("tests") else "off"))
+        return
+    if act in ("add", "edit", "remove") and role != "planner":
+        raise Fail("only the planner adds, edits or removes tasks")
+    msg = ""
+    with r.edit() as d:
+        if act == "add":
+            known = {t["id"] for t in d["tasks"]}
+            deps = [x.strip() for x in (a.deps or "").split(",") if x.strip()]
+            missing = [x for x in deps if x not in known]
+            if missing:
+                raise Fail("unknown dependencies: %s" % ", ".join(missing))
+            new = new_task(a.id or next_id(d), a.title, "build", deps, [x.strip() for x in (a.files or "").split(",") if x.strip()],
+                           a.size or "M", a.model or "", a.effort or "")
+            new["tests"] = a.tests == "on"
+            if new["id"] in known:
+                raise Fail("%s exists" % new["id"])
+            d["tasks"].append(new)
+            r.task_dir(new["id"]).mkdir(parents=True, exist_ok=True)
+            msg = "added %s - now write its brief to %s" % (new["id"], r.task_dir(new["id"]) / "knowledge.md")
+        elif act in ("edit", "remove"):
+            t = find(d, a.target)
+            if t["status"] not in ("queue",) or t["type"] != "build":
+                raise Fail("only queued build tasks can change")
+            if act == "remove":
+                t["status"] = "skipped"
+                msg = "removed %s" % a.target
+            else:
+                for field in ("title", "size", "model", "effort"):
+                    if getattr(a, field):
+                        t[field] = getattr(a, field)
+                if a.tests:
+                    t["tests"] = a.tests == "on"
+                if a.deps is not None:
+                    t["depends_on"] = [x.strip() for x in a.deps.split(",") if x.strip()]
+                if a.files is not None:
+                    t["files"] = [x.strip() for x in a.files.split(",") if x.strip()]
+                msg = "updated %s" % a.target
+        else:
+            t = find(d, tid)
+            if act == "start":
+                t["status"] = "in_progress"
+                msg = "started"
+            elif act == "review":
+                t["status"] = "review"
+                msg = "in review"
+            elif act == "done":
+                if t["type"] in WORK and not nonempty(r.task_dir(tid) / "changes.md"):
+                    raise Fail("write %s first" % (r.task_dir(tid) / "changes.md"))
+                if t["type"] == "plan":
+                    if not nonempty(r.dir / "plan.md"):
+                        raise Fail("write %s first" % (r.dir / "plan.md"))
+                    empty = [x["id"] for x in d["tasks"] if x["type"] in WORK and x["status"] == "queue"
+                             and not nonempty(r.task_dir(x["id"]) / "knowledge.md")]
+                    if empty:
+                        raise Fail("these tasks have no knowledge.md yet: %s" % ", ".join(empty))
+                officer = r.cfg["officer"]
+                check = officer.get("plan") if t["type"] == "plan" else (
+                    officer.get("tasks") and t["type"] == "build" and not t.get("parent"))
+                t["status"] = "audit" if check else "done"
+                t["finished"] = now()
+                msg = "done - the hallucination officer checks it next. End your turn now." if check else "done. End your turn now."
+            elif act == "ask":
+                t.update(status="waiting_on_you", question=" ".join(a.text), question_kind="agent")
+                msg = "question recorded. End your turn now; you are resumed with the answer."
+            elif act == "note":
+                (r.task_dir(tid) / "resume.md").write_text("# Resume note (%s)\n\n%s\n" % (now()[:16], " ".join(a.text)))
+                t["status"] = "paused"
+                msg = "note saved. End your turn now."
+    r.poke()
+    if act == "ask":
+        notify("coord · %s" % r.name, "%s asks: %s" % (tid, " ".join(a.text))[:200])
+    print(msg)
+
+
+def cmd_audit(a):
+    r, tid, role = agent_ctx()
+    if role != "officer":
+        raise Fail("only the hallucination officer records a verdict")
+    if not nonempty(a.file):
+        raise Fail("write your report first: %s" % a.file)
+    with r.edit() as d:
+        t = find(d, tid)
+        t["audit_verdict"], t["audit_file"] = a.verdict, str(Path(a.file).resolve())
+    r.poke()
+    print("verdict recorded: %s. End your turn now." % a.verdict)
+
+
+def cmd_hook(a):
+    try:
+        inp = json.load(sys.stdin)
+    except ValueError:
+        return 0
+    rd = os.environ.get("COORD_RUN_DIR")
+    if not rd:
+        return 0
+    tool, ti = inp.get("tool_name", ""), inp.get("tool_input") or {}
+    if tool == "Bash" and re.match(r"\s*(\S*/)?coord\s", ti.get("command", "") + " "):
+        return 0
+    data = read_json(Path(rd) / "tasks.json", {}) or {}
+    if data.get("status") == "paused" or data.get("terminating"):
+        sys.stderr.write('The run is paused. Write your exact next step with `coord task note "<next step>"`, then end your turn.\n')
+        return 2
+    tid, role = os.environ.get("COORD_TASK", ""), os.environ.get("COORD_ROLE", "")
+    t = next((x for x in data.get("tasks", []) if x["id"] == tid), None)
+    if t and t.get("inbox") and role in ("builder", "planner"):
+        r = Run(Path(rd).parent.parent, Path(rd).name)
+        with r.edit() as d:
+            msgs = find(d, tid)["inbox"]
+            find(d, tid)["inbox"] = []
+        sys.stderr.write("Message from the owner, delivered by the coordinator:\n%s\nTake it into account, then repeat "
+                         "your last tool call if it is still right.\n" % "\n".join("- " + m for m in msgs))
+        return 2
+    path = ti.get("file_path") or ti.get("notebook_path")
+    wt = os.environ.get("COORD_WT", "")
+    if tool in ("Edit", "Write", "NotebookEdit", "MultiEdit") and path and role == "builder" and t and not t.get("tests") and wt:
+        real = os.path.realpath(os.path.expanduser(path))
+        if real.startswith(os.path.realpath(wt) + os.sep):
+            cfg = load_config(Path(rd).parent.parent)
+            if is_test_file(cfg, os.path.relpath(real, os.path.realpath(wt))):
+                sys.stderr.write("Blocked: tests are OFF for this task - the owner didn't ask for them. Don't add, change "
+                                 "or delete test files. If an existing test breaks because of your change, ask with "
+                                 "`coord task ask`.\n")
+                return 2
+    if tool in ("Edit", "Write", "NotebookEdit", "MultiEdit") and path:
+        real = os.path.realpath(os.path.expanduser(path))
+        inside = lambda x: real == os.path.realpath(x) or real.startswith(os.path.realpath(x) + os.sep)
+        allowed = [rd] + ([str(Path(rd).parent)] if role == "planner" else []) + ([wt] if role == "builder" and wt else [])
+        temps = [tempfile.gettempdir(), "/tmp", "/private/tmp"]
+        in_project = inside(os.environ.get("COORD_PROJECT") or str(Path(rd).parent.parent))
+        if not any(inside(x) for x in allowed) and (in_project or not any(inside(x) for x in temps)):
+            sys.stderr.write("Blocked: the %s may only write inside %s.\n" % (role, " or ".join(allowed)))
+            return 2
+    return 0
+
+
+# ---------------------------------------------------------------- live page
+
+def view_state(r):
+    data = r.load()
+    st = r.state()
+    for t in data["tasks"]:
+        kd = r.task_dir(t["id"])
+        t["files_present"] = [f for f in TASK_FILES if nonempty(kd / f)] + sorted(p.name for p in kd.glob("audit-*.md"))
+    data["plan_present"] = nonempty(r.dir / "plan.md")
+    data["plan_audits"] = sorted(p.name for p in r.dir.glob("plan-audit-*.md"))
+    data["scheduler_alive"] = alive(st.get("scheduler_pid"))
+    data["agents"] = st.get("agents") or {}
+    data["summary"] = summary(data, data["scheduler_alive"])
+    data["now"] = now()
+    data["project"] = r.project.name
+    return data
+
+
+def cmd_viewer(a):
+    r = Run(a.project, a.run)
+    pref = 7400 + int(hashlib.sha1(str(r.dir).encode()).hexdigest(), 16) % 500
+    port = free_port(pref)
+    origin = "http://127.0.0.1:%d" % port
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def send(self, code, body, ctype="application/json"):
+            body = body if isinstance(body, bytes) else body.encode()
+            self.send_response(code)
+            self.send_header("Content-Type", ctype + "; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            u = urlparse(self.path)
+            q = parse_qs(u.query)
+            if u.path in ("/", "/index.html"):
+                return self.send(200, (ROOT / "viewer" / "index.html").read_bytes(), "text/html")
+            if u.path in ("/logo.svg",):
+                return self.send(200, (ROOT / "assets" / "logo.svg").read_bytes(), "image/svg+xml")
+            if u.path == "/api/state":
+                try:
+                    return self.send(200, json.dumps(view_state(r)))
+                except Fail as e:
+                    return self.send(410, json.dumps({"error": str(e)}))
+            if u.path == "/api/file":
+                tid, name = q.get("task", [""])[0], q.get("name", [""])[0]
+                if not re.match(r"^[A-Za-z0-9_.-]+\.md$", name) or (tid and not re.match(r"^[A-Za-z0-9_-]+$", tid)):
+                    return self.send(400, "bad request", "text/plain")
+                p = (r.task_dir(tid) if tid else r.dir) / name
+                return self.send(200, p.read_text() if p.exists() else "", "text/plain")
+            self.send(404, "{}")
+
+        def do_POST(self):
+            if self.headers.get("Origin") != origin or "application/json" not in (self.headers.get("Content-Type") or ""):
+                return self.send(403, json.dumps({"error": "forbidden"}))
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0) or 0) or b"{}")
+            act = urlparse(self.path).path
+            try:
+                if act == "/api/approve":
+                    do_approve(r)
+                elif act == "/api/accept":
+                    do_accept(r, body["task"])
+                elif act == "/api/answer":
+                    do_answer(r, body["task"], body["text"])
+                elif act == "/api/pause":
+                    do_pause(r)
+                elif act == "/api/resume":
+                    do_resume(r)
+                else:
+                    return self.send(404, "{}")
+                self.send(200, json.dumps({"ok": True}))
+            except (Fail, KeyError) as e:
+                self.send(400, json.dumps({"error": str(e)}))
+
+    def stop(*_):
+        raise KeyboardInterrupt
+
+    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    r.set_state(viewer_pid=os.getpid(), viewer_port=port)
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    r.set_state(viewer_pid=0)
+
+
+# ---------------------------------------------------------------- before/after shots
+
+def wait_http(url, timeout):
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            with urlopen(url, timeout=5) as resp:
+                if resp.status < 500:
+                    return
+        except Exception:
+            pass
+        time.sleep(2)
+    raise Fail("the dev server at %s did not answer within %ds" % (url, timeout))
+
+
+def shoot(cfg, url, out, width, height, theme, wait_ms):
+    cmd = ["npx", "-y", cfg["playwright"], "screenshot", "--browser", "chromium", "--viewport-size", "%d,%d" % (width, height),
+           "--full-page", "--wait-for-timeout", str(wait_ms), "--color-scheme", theme, url, str(out)]
+    run(cmd)
+
+
+def compose(cfg, rows, work, dest_base):
+    gap, pad, head = 32, 32, 56
+    wmax = max(w for _, w, _, _ in rows)
+    parts, cur, cur_h = [], [], 0
+    for row in rows:
+        h = max(png_size(row[3]["before"])[1], png_size(row[3]["after"])[1]) + head + gap
+        if cur and cur_h + h > 14000:
+            parts.append(cur)
+            cur, cur_h = [], 0
+        cur.append(row)
+        cur_h += h
+    parts.append(cur)
+    outs = []
+    for i, part in enumerate(parts, 1):
+        html = ["<!doctype html><meta charset=utf-8><style>body{margin:0;padding:%dpx;background:#f4f2ee;"
+                "font:15px -apple-system,Segoe UI,sans-serif;color:#2a2a2a}h2{font-size:15px;margin:0 0 12px;font-weight:600}"
+                ".row{margin-bottom:%dpx}.pair{display:flex;gap:%dpx;align-items:flex-start}figure{margin:0}"
+                "figcaption{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#7a7268;margin-bottom:6px}"
+                "img{display:block;border:1px solid #d8d2c8;background:#fff}</style>" % (pad, gap, gap)]
+        for page, w, theme, files in part:
+            html.append("<div class=row><h2>%s &middot; %dpx &middot; %s</h2><div class=pair>" % (page, w, theme))
+            for label in ("before", "after"):
+                html.append("<figure><figcaption>%s</figcaption><img src='%s' width=%d></figure>"
+                            % ("Before &middot; base branch" if label == "before" else "After &middot; this run", files[label].as_uri(), w))
+            html.append("</div></div>")
+        page_file = work / ("compose-%d.html" % i)
+        page_file.write_text("".join(html))
+        dest = Path("%s%s.png" % (dest_base, "" if len(parts) == 1 else " part %d" % i))
+        shoot(cfg, page_file.as_uri(), dest, 2 * wmax + gap + 2 * pad + 4, 800, "light", 300)
+        outs.append(dest)
+    return outs
+
+
+def cmd_shoot(a):
+    r = pick_run(a.run)
+    cfg, dev = r.cfg, r.cfg["dev"]
+    if not dev.get("command"):
+        raise Fail("config.json has no dev.command")
+    data = r.load()
+    base_wt = r.wt("_base")
+    if not base_wt.exists():
+        base_wt.parent.mkdir(parents=True, exist_ok=True)
+        git(r.project, "worktree", "add", "--detach", str(base_wt), data["base"])
+        setup_worktree(r, base_wt)
+    run_wt = ensure_run_wt(r, data)
+    servers, urls = [], {}
+    (r.brain / "logs").mkdir(parents=True, exist_ok=True)
+    work = r.brain / "shots" / dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    work.mkdir(parents=True, exist_ok=True)
+    try:
+        for label, wt in (("before", base_wt), ("after", run_wt)):
+            port = free_port()
+            log = open(r.brain / "logs" / ("dev-%s.log" % label), "w")
+            p = subprocess.Popen(dev["command"].replace("{port}", str(port)), shell=True, cwd=str(wt / dev.get("cwd", ".")),
+                                 stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
+                                 env=dict(os.environ, PORT=str(port)))
+            servers.append(p)
+            urls[label] = "http://127.0.0.1:%d" % port
+        r.set_state(dev_pids=[p.pid for p in servers])
+        for base in urls.values():
+            wait_http(base + dev.get("ready_path", "/"), 420)
+        rows = []
+        shots = cfg["shots"]
+        for page in a.page:
+            path = page if page.startswith("/") else "/" + page
+            for w in shots["widths"]:
+                for theme in shots["themes"]:
+                    files = {}
+                    for label in ("before", "after"):
+                        f = work / ("%s--%s--%d--%s.png" % (label, slug(path, 60), w, theme))
+                        shoot(cfg, urls[label] + path, f, w, shots["height"], theme, shots["wait_ms"])
+                        files[label] = f
+                    rows.append((path, w, theme, files))
+        stamp = dt.datetime.now().strftime("%Y-%m-%d %H.%M")
+        dest_base = Path.home() / "Desktop" / ("%s - %s before-after %s" % (r.project.name, r.name, stamp))
+        for out in compose(cfg, rows, work, dest_base):
+            print(out)
+    finally:
+        for p in servers:
+            kill_group(p.pid)
+        r.set_state(dev_pids=[])
+
+
+# ---------------------------------------------------------------- cli
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="coord", description="Background coordinator for Claude Code agents.")
+    sub = ap.add_subparsers(dest="cmd", required=True, metavar="<command>")
+
+    p = sub.add_parser("start", help="start a coordinator for a request")
+    p.add_argument("request", nargs="*")
+    p.add_argument("--request-file")
+    p.add_argument("--name")
+    p.add_argument("--branch", help="run branch (default coord/<name>)")
+    p.add_argument("--plan-only", action="store_true", help="plan goals and tasks for later; build nothing")
+    p.add_argument("--no-open", action="store_true")
+    p.set_defaults(fn=cmd_start)
+
+    p = sub.add_parser("status", help="open the live page and print one line")
+    p.add_argument("run", nargs="?")
+    p.add_argument("--text", action="store_true", help="print details instead of opening the page")
+    p.add_argument("--no-open", action="store_true")
+    p.set_defaults(fn=cmd_status)
+
+    p = sub.add_parser("wait", help="block until the run needs you or ends (zero tokens)")
+    p.add_argument("run", nargs="?")
+    p.set_defaults(fn=cmd_wait)
+
+    for name, help_ in (("approve", "approve the plan"), ("pause", "pause: agents write a note and stop"),
+                        ("resume", "resume a paused or stopped run"), ("run", "build a planned run")):
+        p = sub.add_parser(name, help=help_)
+        p.add_argument("run", nargs="?")
+        p.set_defaults(fn=cmd_simple)
+    for name, help_ in (("accept", "accept a task the officer keeps sending back"),
+                        ("retry", "run a task again with a fresh agent"), ("stop", "stop and skip a task")):
+        p = sub.add_parser(name, help=help_)
+        p.add_argument("task")
+        p.add_argument("--run")
+        p.set_defaults(fn=cmd_simple)
+    for name, help_ in (("answer", "answer a task's question"), ("tell", "send a note to a task's agent")):
+        p = sub.add_parser(name, help=help_)
+        p.add_argument("task")
+        p.add_argument("text", nargs="+")
+        p.add_argument("--run")
+        p.set_defaults(fn=cmd_simple)
+
+    p = sub.add_parser("add", help="change the plan or add work; it goes back through the officer and you")
+    p.add_argument("text", nargs="+")
+    p.add_argument("--run")
+    p.set_defaults(fn=cmd_add)
+
+    p = sub.add_parser("shots", help="before/after screenshots of this run, saved to the Desktop")
+    p.add_argument("note", nargs="*")
+    p.add_argument("--run")
+    p.set_defaults(fn=cmd_shots)
+
+    p = sub.add_parser("list", help="coordinators in this project")
+    p.set_defaults(fn=cmd_list)
+
+    p = sub.add_parser("terminate", help="end a coordinator: stop everything and remove its internal files")
+    p.add_argument("run", nargs="?")
+    p.add_argument("--purge", action="store_true", help="also delete its knowledge folder in the project")
+    p.set_defaults(fn=cmd_terminate)
+
+    p = sub.add_parser("task", help="(agents) update your own task")
+    p.add_argument("action", choices=["show", "list", "start", "review", "done", "ask", "note", "add", "edit", "remove"])
+    p.add_argument("target", nargs="?")
+    p.add_argument("text", nargs="*")
+    p.add_argument("--id")
+    p.add_argument("--title")
+    p.add_argument("--deps")
+    p.add_argument("--files")
+    p.add_argument("--size", choices=["S", "M", "L"])
+    p.add_argument("--model")
+    p.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"])
+    p.add_argument("--tests", choices=["on", "off"], help="on only when the owner's words ask for tests")
+    p.set_defaults(fn=cmd_task)
+
+    p = sub.add_parser("audit", help="(officer) record a verdict")
+    p.add_argument("verdict", choices=["approve", "revise"])
+    p.add_argument("--file", required=True)
+    p.set_defaults(fn=cmd_audit)
+
+    p = sub.add_parser("_shoot")
+    p.add_argument("--page", action="append", required=True)
+    p.add_argument("--run")
+    p.set_defaults(fn=cmd_shoot)
+
+    p = sub.add_parser("_hook")
+    p.set_defaults(fn=cmd_hook)
+    for name, fn in (("_scheduler", cmd_scheduler), ("_viewer", cmd_viewer)):
+        p = sub.add_parser(name)
+        p.add_argument("--project", required=True)
+        p.add_argument("--run", required=True)
+        p.set_defaults(fn=fn)
+
+    a = ap.parse_args(argv)
+    if a.cmd == "task" and a.action in ("ask", "note"):
+        a.text = ([a.target] if a.target else []) + a.text
+        if not a.text:
+            ap.error("say what: coord task %s \"...\"" % a.action)
+    try:
+        code = a.fn(a)
+        return code or 0
+    except Fail as e:
+        print("coord: %s" % e, file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

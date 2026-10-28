@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 400" width="1280" height="400" role="img" aria-labelledby="title">
+  <title id="title">Coordinator - conduct a team of Claude Code agents</title>
+  <defs>
+    <radialGradient id="bg" cx="18%" cy="20%" r="120%">
+      <stop offset="0" stop-color="#232a52"/>
+      <stop offset="0.5" stop-color="#151a36"/>
+      <stop offset="1" stop-color="#0b0e1f"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e6c983"/>
+      <stop offset="1" stop-color="#b28a45"/>
+    </linearGradient>
+    <linearGradient id="ivory" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f6efe0"/>
+      <stop offset="1" stop-color="#d9ccb0"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#f3dc9c" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#f3dc9c" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="400" rx="28" fill="url(#bg)"/>
+  <rect x="12" y="12" width="1256" height="376" rx="20" fill="none" stroke="#c9a45c" stroke-opacity="0.3" stroke-width="1.5"/>
+
+  <g transform="translate(40 -26) scale(0.86)">
+    <path d="M 216.98 130.12 A 200 200 0 0 1 409.88 323.02" fill="none" stroke="url(#gold)" stroke-opacity="0.45"
+          stroke-width="3" stroke-dasharray="2 10" stroke-linecap="round"/>
+    <g fill="url(#gold)">
+      <circle cx="245" cy="133" r="15"/><circle cx="304" cy="153" r="15"/><circle cx="351" cy="189" r="15"/>
+      <circle cx="387" cy="236" r="15"/><circle cx="407" cy="295" r="15"/>
+    </g>
+    <g fill="none" stroke="#e6c983" stroke-opacity="0.35" stroke-width="2">
+      <circle cx="245" cy="133" r="24"/><circle cx="304" cy="153" r="24"/><circle cx="351" cy="189" r="24"/>
+      <circle cx="387" cy="236" r="24"/><circle cx="407" cy="295" r="24"/>
+    </g>
+    <g fill="url(#ivory)" stroke="url(#ivory)" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="160" cy="232" r="30" stroke="none"/>
+      <path d="M 112 298 C 120 274, 200 268, 210 290 L 198 372 C 207 402, 214 438, 208 462 L 170 446 L 161 414 L 152 446 L 114 462 C 108 438, 115 402, 124 372 Z" stroke="none"/>
+      <path d="M 120 302 Q 92 284 78 232" fill="none" stroke-width="22"/>
+      <path d="M 202 296 Q 238 272 262 222" fill="none" stroke-width="22"/>
+    </g>
+    <path d="M 161 300 L 161 404" stroke="#151a36" stroke-opacity="0.35" stroke-width="3" stroke-linecap="round"/>
+    <rect x="86" y="468" width="150" height="9" rx="4.5" fill="url(#gold)" fill-opacity="0.85"/>
+    <path d="M 262 222 L 318 150" stroke="#f6efe0" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="318" cy="150" r="20" fill="url(#glow)"/>
+    <circle cx="318" cy="150" r="4" fill="#fff8e6"/>
+  </g>
+
+  <g font-family="Georgia, 'Iowan Old Style', 'Times New Roman', serif">
+    <text x="500" y="178" font-size="92" fill="#f6efe0" letter-spacing="1">Coordinator</text>
+    <text x="504" y="232" font-size="26" fill="#e6c983" font-style="italic">Conduct a team of Claude Code agents from one request.</text>
+  </g>
+  <text x="504" y="300" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" fill="#b9b2a2"
+        letter-spacing="2.4">PLAN  ·  AUDIT  ·  BUILD IN PARALLEL  ·  REVIEW  ·  MERGE  ·  IN THE BACKGROUND</text>
+  <rect x="504" y="266" width="72" height="2" fill="url(#gold)"/>
+</svg>
