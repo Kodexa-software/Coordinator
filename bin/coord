@@ -463,6 +463,46 @@ def summary(data, scheduler_alive=None):
     return " · ".join(parts)
 
 
+def owner_actions(r, data, scheduler_alive=None):
+    """Everything waiting on the owner, in order. One list for the live page and the chat."""
+    if scheduler_alive is None:
+        scheduler_alive = alive(r.state().get("scheduler_pid"))
+    out = []
+    add = lambda key, kind, text, do, **kw: out.append(dict(key=key, kind=kind, text=text, do=do, **kw))
+    asks = [t for t in data["tasks"] if t["status"] == "waiting_on_you"]
+    if not data.get("plan_approved") and data["status"] == "waiting_on_you" and not asks:
+        add("plan", "plan", "The plan is ready for your approval", "approve it (`coord approve`) or say what to change")
+    for t in asks:
+        qk = t.get("question_kind") or "agent"
+        do = {"officer": "`coord accept %s`, or `coord answer %s \"<what to change>\"`" % (t["id"], t["id"]),
+              "stalled": "`coord retry %s`, `coord stop %s`, or `coord answer %s \"<guidance>\"`" % ((t["id"],) * 3)}
+        add("q-" + t["id"], "question", t.get("question") or "", do.get(qk, "`coord answer %s \"<answer>\"`" % t["id"]),
+            task=t["id"], title=t["title"], question_kind=qk)
+    if scheduler_alive is False and data["status"] in ("running", "planning"):
+        add("scheduler", "scheduler", "The scheduler stopped while the run was %s" % data["status"], "`coord resume`")
+    for f in data.get("followups") or []:
+        repo = Path(f["repo"]).name
+        if f.get("status") == "failed":
+            add("fu-" + f["repo"], "followup", "The follow-up run in %s failed to start: %s" % (repo, f.get("error")),
+                "start it yourself from that repo with /coordinate", repo=f["repo"], failed=True)
+        elif f.get("status") == "started":
+            fu = read_json(Path(f["repo"]) / STORE / f["run"] / "tasks.json")
+            if fu and not fu.get("plan_approved"):
+                add("fu-" + f["repo"], "followup", "Approve the plan of the follow-up run %s in %s" % (f["run"], repo),
+                    f.get("url") or "`coord status %s` in that repo" % f["run"], repo=f["repo"], url=f.get("url") or "")
+    for x in data.get("todos") or []:
+        if not x.get("done"):
+            add("todo-%d" % x["n"], "todo", x["text"], "when it's done: `coord todo done %d`" % x["n"], n=x["n"], task=x.get("task", ""))
+    if data["status"] == "finished":
+        if data.get("pr_url"):
+            add("pr", "pr", "Review and merge the pull request", data["pr_url"], url=data["pr_url"])
+        external = sorted({f for t in data["tasks"] if t.get("status") == "done" for f in (t.get("external") or [])})
+        if external:
+            add("external", "external", "Commit the files updated outside the repo (coord doesn't commit them)",
+                ", ".join(external), files=external)
+    return out
+
+
 # ---------------------------------------------------------------- agents
 
 def role_of(t):
@@ -662,17 +702,19 @@ def start_job(r, kind, tid):
     n = len(list(logs.glob("%s-*.json" % tid))) + 1
     if kind == "audit":
         role = "officer"
+        sid = str(uuid.uuid4())
         with r.edit() as d:
             tt = find(d, tid)
             tt["audit_round"] += 1
             tt["audit_verdict"] = ""
+            tt.setdefault("audit_sessions", []).append({"round": tt["audit_round"], "session": sid})
             t = dict(tt)
         cwd = r.project
         model = cfg["models"]["officer"]
         effort = cfg["efforts"]["officer"] if t["type"] == "plan" else cfg["efforts"].get("officer_task", "medium")
         cmd = [cfg["claude"], "-p"] + add_dirs(r, cwd) + ["--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
                "--settings", r.brain / "settings.json", "--output-format", "json", "-n", "%s:%s:officer" % (r.name, tid),
-               "--append-system-prompt", role_prompt("officer"), "--session-id", str(uuid.uuid4()),
+               "--append-system-prompt", role_prompt("officer"), "--session-id", sid,
                audit_prompt(r, data, t)]
     else:
         role = role_of(t)
@@ -856,45 +898,70 @@ def plan_title(r, data):
     return data["name"]
 
 
+TASK_WORDS = {"queue": "○ queued", "in_progress": "● in progress", "review": "● in review", "audit": "● in audit",
+              "waiting_on_you": "**waiting on you**", "done": "✓ done", "skipped": "– skipped"}
+
+
 def pr_body(r, data):
-    rows = []
-    for t in data["tasks"]:
-        if t["type"] not in WORK:
-            continue
-        state = "merged" if t.get("merged") else t["status"].replace("_", " ")
-        rows.append("| %s | %s | %s | %s | %s |" % (t["id"], t["title"].replace("|", "/"), state,
-                                                    human_minutes(t.get("minutes")), human_tokens(t.get("tokens"))))
-    out = ["> Opened by [Coordinator](https://github.com/Kodexa-software/Coordinator) and updated after every merged task.",
-           "", "## Request", ""]
+    work = [t for t in data["tasks"] if t["type"] in WORK]
+    counted = [t for t in work if not t.get("parent") and t["status"] != "skipped"]
+    stamp = dt.datetime.now().astimezone().strftime("%d %b %Y, %H:%M %Z")
+    out = ["**Status:** %s · %d of %d tasks merged · updated %s" % (
+        data["status"].replace("_", " "), sum(1 for t in counted if t.get("merged")), len(counted), stamp),
+        "", "## Request", ""]
+    out += ["> " + line if line else ">" for line in owner_words(data).splitlines()] + [""]
     if (data.get("design") or {}).get("choice"):
-        out[1:1] = ["", "**Design language:** %s" % design_line(data)] + ["> " + line if line else ">" for line in owner_words(data).splitlines()] + [""]
+        out += ["**Design language:** %s" % design_line(data), ""]
+    out += ["## Tasks", "", "| id | task | status | time | tokens |", "|---|---|---|---|---|"]
+    for t in work:
+        state = "✓ merged" if t.get("merged") else TASK_WORDS.get(t["status"], t["status"].replace("_", " "))
+        out.append("| %s | %s | %s | %s | %s |" % (t["id"], t["title"].replace("|", "/"), state,
+                                                  human_minutes(t.get("minutes")), human_tokens(t.get("tokens"))))
+    out.append("")
     plan = r.dir / "plan.md"
     if nonempty(plan):
         out += ["## Plan", "", "<details><summary>%s</summary>" % plan_title(r, data), "", plan.read_text().strip(), "",
                 "</details>", ""]
-    out += ["## Tasks", "", "| id | task | status | time | tokens |", "|---|---|---|---|---|"] + rows
+    followups = data.get("followups") or []
+    if followups:
+        out += ["## Not in this run", ""]
+        out += ["- **%s**: follow-up run `%s` (%s)" % (Path(f["repo"]).name, f.get("run") or f.get("name", ""),
+                                                      f.get("status", "pending")) for f in followups] + [""]
+    out.append("<sub>Opened by [Coordinator](https://github.com/Kodexa-software/Coordinator) and updated as the run works.</sub>")
     return "\n".join(out) + "\n"
 
 
-def sync_pr(r):
-    if not r.cfg.get("push"):
-        return
-    data = r.load()
-    if data.get("mode") != "build" or not data.get("branch"):
-        return
-    branch = data["branch"]
+def push_branch(r, branch):
     if run(["git", "remote", "get-url", "origin"], cwd=r.project, check=False).returncode:
         r.log("push skipped: the repository has no origin remote")
-        return
+        return False
     res = run(["git", "push", "-u", "origin", branch], cwd=r.project, check=False)
     if res.returncode:
         r.log("push failed: %s" % (res.stderr or res.stdout).strip()[-300:])
-        return
+        return False
     r.log("pushed %s" % branch)
+    return True
+
+
+def sync_pr(r, push=True):
+    # push=False only refreshes the body of the run's pull request, when it has one
+    if not r.cfg.get("push"):
+        return
+    data = r.load()
+    if data.get("mode") != "build" or not data.get("branch") or (not push and not data.get("pr_url")):
+        return
+    branch = data["branch"]
+    if push and not push_branch(r, branch):
+        return
     if not r.cfg.get("pr") or not shutil.which("gh"):
         return
     body = r.brain / "pr-body.md"
     body.write_text(pr_body(r, data))
+    if not push:
+        res = run(["gh", "pr", "edit", data["pr_url"], "--body-file", body], cwd=r.project, check=False)
+        if res.returncode:
+            r.log("pull request update failed: %s" % (res.stderr or res.stdout).strip()[-300:])
+        return
     view = run(["gh", "pr", "view", branch, "--json", "url,state"], cwd=r.project, check=False)
     pr = json.loads(view.stdout) if view.returncode == 0 and view.stdout.strip() else {}
     if pr.get("state") == "OPEN":
@@ -910,6 +977,25 @@ def sync_pr(r):
         with r.edit() as d:
             d["pr_url"] = url
         r.log("pull request: %s" % url)
+
+
+def open_pr(r, data):
+    # The run's first change: GitHub refuses a pull request without commits, so an empty start commit opens it at approval
+    if not r.cfg.get("push") or not r.cfg.get("pr"):
+        r.log("pull request skipped: push or pr is off")
+        return
+    if run(["git", "remote", "get-url", "origin"], cwd=r.project, check=False).returncode:
+        r.log("pull request skipped: the repository has no origin remote")
+        return
+    if not shutil.which("gh"):
+        r.log("pull request skipped: gh is not on PATH")
+        return
+    wt = ensure_run_wt(r, data)
+    msg = "Start %s." % plan_title(r, data).rstrip(".")
+    if msg not in git(wt, "log", "--format=%s", "%s..HEAD" % data["base"]).splitlines():
+        ident = [] if git(wt, "config", "user.email", check=False) else ["-c", "user.name=coordinator", "-c", "user.email=coordinator@localhost"]
+        run(["git", *ident, "commit", "--allow-empty", "--no-verify", "-m", msg], cwd=wt)
+    sync_pr(r)
 
 
 def next_jobs(r, data, jobs):
@@ -962,7 +1048,7 @@ def cmd_scheduler(a):
             if t["status"] in ("in_progress", "review"):
                 t["status"], t["resume"] = "queue", True
                 t["resume_msg"] = "Your session was interrupted. Check what is already done, then continue and finish the task."
-    jobs, announced = {}, None
+    jobs, announced, pr_sig, pr_tried = {}, None, None, False
     r.log("scheduler up (pid %d)" % os.getpid())
     while not stop:
         for key, job in list(jobs.items()):
@@ -999,6 +1085,12 @@ def cmd_scheduler(a):
                         tt = find(d, tid)
                         tt.update(status="waiting_on_you", question_kind="stalled",
                                   question="Could not start %s: %s" % (tid, e))
+            if data.get("plan_approved") and data.get("mode") == "build" and not data.get("pr_url") and not pr_tried:
+                pr_tried = True
+                try:
+                    open_pr(r, data)
+                except Exception as e:
+                    r.log("opening the pull request failed: %r" % e)
         with r.edit() as d:
             d["status"] = derive_status(d, bool(jobs))
             status = d["status"]
@@ -1012,9 +1104,17 @@ def cmd_scheduler(a):
         r.set_state(agents={k: {"pid": j.p.pid, "task": j.tid, "role": j.role, "kind": j.kind,
                                 "since": dt.datetime.fromtimestamp(j.t0).astimezone().isoformat(timespec="seconds")}
                             for k, j in jobs.items()})
-        if not jobs and status in ("finished", "planned", "paused"):
-            if status == "finished":
+        sig = [status] + [(t["id"], t["status"], bool(t.get("merged"))) for t in data["tasks"]]
+        stopping = not jobs and status in ("finished", "planned", "paused")
+        try:
+            if stopping and status == "finished":
                 sync_pr(r)
+            elif sig != pr_sig and data.get("pr_url"):
+                sync_pr(r, push=False)
+        except Exception as e:
+            r.log("pull request update failed: %r" % e)
+        pr_sig = sig
+        if stopping:
             break
         sleep_poke(r, 2.0)
     for job in jobs.values():
@@ -1064,8 +1164,12 @@ def cmd_start(a):
     data = {"name": name, "request": request.strip(), "mode": "plan" if a.plan_only else "build",
             "status": "planning", "plan_approved": False, "base": base, "branch": a.branch or "coord/%s" % name,
             "created": now(), "updated": now(), "tasks": [new_task("T0", "Plan the work", "plan")]}
+    if not a.plan_only:
+        ensure_branch(r, data)
     (r.task_dir("T0")).mkdir(parents=True)
     write_json(r.tasks_file, data)
+    if not a.plan_only and r.cfg.get("push"):
+        push_branch(r, data["branch"])
     (r.task_dir("T0") / "knowledge.md").write_text(
         "# T0 - Plan the work\n\n## The owner's request, word for word\n\n%s\n\n## Mode\n\n%s\n" % (
             request.strip(), "Plan only: goals, milestones and tasks that later runs will build."
@@ -1111,9 +1215,13 @@ def print_status_text(r, data):
     url = viewer_url(r)
     if url:
         print("live page: %s" % url)
-    for t in data["tasks"]:
-        if t["status"] == "waiting_on_you":
-            print("QUESTION %s (%s): %s" % (t["id"], t.get("question_kind") or "agent", t.get("question")))
+    acts = owner_actions(r, data)
+    if acts:
+        print("WAITING ON YOU:")
+        for i, x in enumerate(acts, 1):
+            who = "%s (%s) asks: " % (x["task"], x["question_kind"]) if x["kind"] == "question" else \
+                "%s: " % x["task"] if x.get("task") else ""
+            print("  %d. %s%s - %s" % (i, who, x["text"], x["do"]))
     if not data.get("plan_approved") and data["status"] == "waiting_on_you":
         plan = r.dir / "plan.md"
         print("PLAN READY: %s" % plan)
@@ -1121,7 +1229,7 @@ def print_status_text(r, data):
             keep, out = False, []
             for line in plan.read_text().splitlines():
                 if line.startswith("## "):
-                    keep = line[3:].strip().lower() in ("goal", "questions for the owner", "out of scope")
+                    keep = line[3:].strip().lower() in ("goal", "questions for the owner", "out of scope", "not in this run")
                 if keep:
                     out.append(line)
             print("\n".join(out[:60]))
@@ -1131,12 +1239,20 @@ def print_status_text(r, data):
                 print("  %s %s [%s, %s/%s%s] after: %s" % (t["id"], t["title"], t["size"], t.get("model") or "default",
                                                          t.get("effort") or "default", ", tests on" if t.get("tests") else "",
                                                          ", ".join(t["depends_on"]) or "-"))
+        if data.get("followups"):
+            print("FOLLOW-UP RUNS:")
+            for f in data["followups"]:
+                print("  %s - %s" % (followup_line(data, f), f["note"]))
+    elif data.get("plan_approved"):
+        for f in data.get("followups") or []:
+            print("FOLLOW-UP %s: %s" % (f.get("run") or f["name"], followup_line(data, f)))
     if (data.get("design") or {}).get("choice"):
         print("DESIGN LANGUAGE: %s" % design_line(data))
-    if data.get("pr_url"):
+    # Once finished, the pull request and the outside files are in the list above.
+    if data.get("pr_url") and data["status"] != "finished":
         print("PULL REQUEST: %s" % data["pr_url"])
     external = sorted({f for t in data["tasks"] if t.get("status") == "done" for f in (t.get("external") or [])})
-    if external:
+    if external and data["status"] != "finished":
         print("UPDATED OUTSIDE THE REPO (not committed by coord): %s" % ", ".join(external))
     if data["status"] == "finished":
         if data.get("branch"):
@@ -1148,30 +1264,109 @@ def print_status_text(r, data):
 
 def cmd_wait(a):
     r = pick_run(a.run)
+    # Also return when something new waits on the owner (a manual step, a follow-up run), not only on a status change.
+    # The scheduler's own item is left to the check below, which waits out a restart.
+    keys = lambda d: {x["key"] for x in owner_actions(r, d, True)}
+    seen = keys(r.load())
     while True:
         data = r.load()
-        if data["status"] in WAIT_STATES:
+        if data["status"] in WAIT_STATES or keys(data) - seen:
             break
         if not alive(r.state().get("scheduler_pid")):
             time.sleep(3)
             if not alive(r.state().get("scheduler_pid")) and r.load()["status"] not in WAIT_STATES:
-                print("the scheduler stopped while the run was %s; `coord resume` restarts it" % r.load()["status"])
-                return
+                break
         time.sleep(4)
     print_status_text(r, r.load())
 
 
-def do_approve(r):
+def do_approve(r, note=""):
     with r.edit() as d:
         for t in d["tasks"]:
             if t["type"] == "plan" and t["status"] in ("waiting_on_you", "audit"):
                 t["status"], t["question"], t["question_kind"] = "done", "", ""
         if any(t["type"] == "plan" and t["status"] in OPEN for t in d["tasks"]):
             raise Fail("the plan is not ready yet")
+        if note:
+            add_owner_note(d, "answer", note)
         d["plan_approved"] = True
         d["status"] = derive_status(d)
     r.poke()
     start_daemon(r, "scheduler")
+    return start_followups(r)
+
+
+def approve_with(r, answers, comment):
+    """The live page's approval: defaults and no comment approve; anything else goes back to the planner."""
+    lines = ["%s. %s - %s%s" % (a.get("n") or i + 1, a["question"], a["answer"], " (default)" if a.get("default") else "")
+             for i, a in enumerate(answers)]
+    text = "Answers to the plan's questions:\n" + "\n".join(lines) if lines else ""
+    if not comment and all(a.get("default") for a in answers):
+        return do_approve(r, text)
+    do_add(r, "\n\n".join(x for x in (text, "Comment: " + comment if comment else "") if x))
+    return []
+
+
+def followup_repo(r, path):
+    p = Path(path).expanduser()
+    if not path or not p.is_absolute():
+        raise Fail("give the repo's absolute path: coord task followup --repo \"<absolute repo path>\" \"<note>\"")
+    out = run(["git", "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"], cwd=p,
+              check=False) if p.is_dir() else None
+    if not out or out.returncode or Path(out.stdout.split("\n")[0]).resolve() != p.resolve():
+        raise Fail("%s is not the top folder of a git repository" % p)
+    repo = Path(out.stdout.split("\n")[1]).parent.resolve()
+    if repo == r.project:
+        raise Fail("%s is this run's own repo; add a task instead" % repo)
+    return repo
+
+
+def followup_line(data, f):
+    if f.get("status") == "started":
+        return "%s · %s" % (f["repo"], f.get("url") or "live page: `coord status %s` in that repo" % f["run"])
+    if f.get("status") == "failed":
+        return "%s · failed to start: %s" % (f["repo"], f.get("error"))
+    if data.get("mode") != "build":
+        return "%s · not started (plan-only run)" % f["repo"]
+    return "%s · %s" % (f["repo"], "starting" if f.get("status") == "starting" else "starts when you approve")
+
+
+def start_followups(r):
+    """Start each pending follow-up run in its own repo with the owner's full words. Failures are recorded, never raised."""
+    with r.edit() as d:
+        if d.get("mode") != "build":
+            return []
+        todo = [f for f in d.get("followups") or [] if f.get("status") == "pending"]
+        for f in todo:
+            f["status"] = "starting"
+        words = owner_words(d)
+    env = {k: v for k, v in os.environ.items() if k not in ("COORD_PROJECT", "COORD_RUN_DIR", "COORD_TASK", "COORD_ROLE")}
+    for f in todo:
+        try:
+            name, n = f["name"], 2
+            while (Path(f["repo"]) / STORE / name / "tasks.json").exists():
+                name, n = "%s-%d" % (slug(f["name"], 37), n), n + 1
+            req = r.dir / ("followup-%s.md" % name)
+            req.write_text("%s\n\n[coordinator context: started by run '%s' in %s when the owner approved its plan. This "
+                           "run's part: %s. The rest is built there.]\n" % (words, r.name, r.project, f["note"].rstrip(".")))
+            p = subprocess.run([sys.executable, str(ROOT / "bin" / "coord"), "start", "--name", name, "--request-file",
+                                str(req), "--no-open"], cwd=f["repo"], env=env, text=True, capture_output=True,
+                               stdin=subprocess.DEVNULL, timeout=300)
+            m = re.search(r"^started (\S+) - planning\. Live page: (\S+)", p.stdout, re.M)
+            if p.returncode or not m:
+                raise Fail((p.stderr or p.stdout).strip()[-300:] or "coord start exited with %d" % p.returncode)
+            f.update(status="started", run=m.group(1), url=m.group(2) if m.group(2).startswith("http") else "", error="")
+            r.log("follow-up run %s started in %s" % (f["run"], f["repo"]))
+        except Exception as e:
+            f.update(status="failed", error=str(e).replace("coord: ", "", 1))
+            r.log("follow-up run for %s failed to start: %s" % (f["repo"], f["error"]))
+    if todo:
+        result = {f["repo"]: f for f in todo}
+        with r.edit() as d:
+            for f in d.get("followups") or []:
+                if f["repo"] in result and f.get("status") == "starting":
+                    f.update(result[f["repo"]])
+    return todo
 
 
 def do_answer(r, tid, text):
@@ -1199,6 +1394,30 @@ def do_accept(r, tid):
     start_daemon(r, "scheduler")
 
 
+def do_todo_done(r, n):
+    with r.edit() as d:
+        x = next((x for x in d.get("todos") or [] if x["n"] == n), None)
+        if not x:
+            raise Fail("no manual step %s" % n)
+        x.update(done=True, done_at=now())
+    r.poke()
+
+
+def cmd_todo(a):
+    r = pick_run(a.run)
+    if a.action == "done":
+        if a.n is None:
+            raise Fail("say which: coord todo done <n>")
+        do_todo_done(r, a.n)
+        print("marked %d done" % a.n)
+        return
+    todos = r.load().get("todos") or []
+    for x in todos:
+        print("%d. [%s] %s%s" % (x["n"], "done" if x.get("done") else "to do", "%s: " % x["task"] if x.get("task") else "", x["text"]))
+    if not todos:
+        print("no manual steps recorded")
+
+
 def do_pause(r):
     with r.edit() as d:
         d["status"] = "paused"
@@ -1221,8 +1440,10 @@ def do_resume(r):
 def cmd_simple(a):
     r = pick_run(a.run)
     if a.cmd == "approve":
-        do_approve(r)
+        started = do_approve(r)
         print("approved - building starts now" if r.load()["mode"] == "build" else "approved - the plan is saved; `coord run %s` builds it later" % r.name)
+        for f in started:
+            print("follow-up run %s: %s" % (f.get("run") or f["name"], followup_line({}, f)))
     elif a.cmd == "accept":
         do_accept(r, a.task)
         print("accepted %s" % a.task)
@@ -1242,6 +1463,8 @@ def cmd_simple(a):
         start_daemon(r, "scheduler")
         start_daemon(r, "viewer")
         print("building %s · %s" % (r.name, viewer_url(r)))
+        for f in start_followups(r) if r.load().get("plan_approved") else []:
+            print("follow-up run %s: %s" % (f.get("run") or f["name"], followup_line({}, f)))
     elif a.cmd == "retry":
         with r.edit() as d:
             t = find(d, a.task)
@@ -1273,9 +1496,7 @@ def cmd_simple(a):
         print("delivered to %s at its next step" % a.task if live else "added to %s's brief" % a.task)
 
 
-def cmd_add(a):
-    r = pick_run(a.run)
-    text = " ".join(a.text)
+def do_add(r, text):
     with r.edit() as d:
         add_owner_note(d, "addition", text)
         planner = next((t for t in d["tasks"] if t["type"] == "plan" and session_exists(t.get("session"))), None)
@@ -1297,6 +1518,10 @@ def cmd_add(a):
             "knowledge files. Don't touch tasks that are done.\n" % (tid, text))
     r.poke()
     start_daemon(r, "scheduler")
+
+
+def cmd_add(a):
+    do_add(pick_run(a.run), " ".join(a.text))
     print("the planner is updating the plan; it comes back to you after the officer's check")
 
 
@@ -1312,7 +1537,7 @@ def cmd_shots(a):
     (r.task_dir(tid) / "knowledge.md").write_text("# %s - Before/after screenshots\n\n## The owner's note\n\n%s\n" % (tid, note))
     r.poke()
     start_daemon(r, "scheduler")
-    print("taking screenshots (%s); the PNG lands on your Desktop" % tid)
+    print("taking screenshots (%s); the PNG lands in %s" % (tid, r.task_dir(tid)))
 
 
 def cmd_map(a):
@@ -1449,13 +1674,36 @@ def cmd_task(a):
                 ",".join(t["files"]) or "-", t.get("model") or "default", t.get("effort") or "default", t["size"],
                 "on" if t.get("tests") else "off", "on" if t.get("ui") else "off")
                   + (" | external: %s" % ",".join(t["external"]) if t.get("external") else ""))
-        print("design language: %s" % design_line(r.load()))
+        data = r.load()
+        print("design language: %s" % design_line(data))
+        for f in data.get("followups") or []:
+            print("follow-up %s: %s | %s" % (f.get("run") or f["name"], followup_line(data, f), f["note"]))
         return
-    if act in ("add", "edit", "remove", "design") and role != "planner":
-        raise Fail("only the planner adds, edits or removes tasks and records the design language")
+    if act in ("add", "edit", "remove", "design", "followup") and role != "planner":
+        raise Fail("only the planner adds, edits or removes tasks and records the design language and follow-up runs")
     msg = ""
+    repo = followup_repo(r, a.repo or "") if act == "followup" else None
     with r.edit() as d:
-        if act == "add":
+        if act == "followup":
+            note, fus = " ".join(a.text).strip(), d.setdefault("followups", [])
+            i = next((i for i, f in enumerate(fus) if f["repo"] == str(repo)), None)
+            if i is not None and (fus[i].get("status") == "started" or fus[i].get("run")):
+                raise Fail("the follow-up run for %s has started (%s); put any change for it under \"Not in this run\""
+                           % (repo, fus[i].get("run") or fus[i]["name"]))
+            if not note:
+                if i is not None:
+                    del fus[i]
+                msg = "removed the follow-up for %s" % repo if i is not None else "no follow-up recorded for %s" % repo
+            else:
+                f = {"repo": str(repo), "note": note, "name": slug("%s-%s" % (d["name"], slug(repo.name))),
+                     "status": "pending", "run": "", "url": "", "error": ""}
+                if i is None:
+                    fus.append(f)
+                else:
+                    fus[i] = f
+                msg = "follow-up run %s recorded for %s; %s" % (f["name"], repo, "coord starts it when the owner approves"
+                                                               if d.get("mode") == "build" else "a plan-only run doesn't start it")
+        elif act == "add":
             known = {t["id"] for t in d["tasks"]}
             deps = [x.strip() for x in (a.deps or "").split(",") if x.strip()]
             missing = [x for x in deps if x not in known]
@@ -1531,9 +1779,16 @@ def cmd_task(a):
                 (r.task_dir(tid) / "resume.md").write_text("# Resume note (%s)\n\n%s\n" % (now()[:16], " ".join(a.text)))
                 t["status"] = "paused"
                 msg = "note saved. End your turn now."
+            elif act == "todo":
+                todos = d.setdefault("todos", [])
+                n = max([x["n"] for x in todos] or [0]) + 1
+                todos.append({"n": n, "task": tid, "text": " ".join(a.text), "at": now(), "done": False})
+                msg = "recorded for the owner (step %d). Carry on with your work." % n
     r.poke()
     if act == "ask":
         notify("coord · %s" % r.name, "%s asks: %s" % (tid, " ".join(a.text))[:200])
+    if act == "todo":
+        notify("coord · %s" % r.name, "%s: for you to do: %s" % (tid, " ".join(a.text))[:200])
     print(msg)
 
 
@@ -1602,16 +1857,183 @@ def cmd_hook(a):
 
 # ---------------------------------------------------------------- live page
 
+TRANSCRIPTS = Path.home() / ".claude" / "projects"
+REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
+TOOL_ARGS = ("file_path", "notebook_path", "command", "pattern", "url", "query", "skill", "description", "prompt")
+PATH_ARGS = ("file_path", "notebook_path")
+
+
+def task_sessions(t):
+    # A task's agent sessions in order: its planner or builder, then each officer audit.
+    out = [{"session": t["session"], "role": role_of(t)}] if t.get("session") else []
+    return out + [{"session": a["session"], "role": "officer", "round": a["round"]} for a in t.get("audit_sessions", [])]
+
+
+def transcript(sid):
+    # Found by session id only, and only under ~/.claude/projects/.
+    base = TRANSCRIPTS.resolve()
+    for p in base.glob("*/%s.jsonl" % sid):
+        p = p.resolve()
+        if base in p.parents and p.is_file():
+            return p
+    return None
+
+
+def subagents(main):
+    # The subagents (reviewers) a session spawned, oldest first, named from the .meta.json beside each.
+    def born(p):
+        try:
+            st = p.stat()
+        except OSError:
+            return 0
+        return getattr(st, "st_birthtime", st.st_mtime)
+    out = []
+    for p in sorted((main.parent / main.stem / "subagents").glob("agent-*.jsonl"), key=born):
+        meta = read_json(p.with_suffix(".meta.json"), {}) or {}
+        out.append({"agent": p.stem, "type": str(meta.get("agentType", ""))[:80],
+                    "description": str(meta.get("description", ""))[:120]})
+    return out
+
+
+def _clip(s, n):
+    return s if len(s) <= n else s[:n] + "…"
+
+
+def conversation_entries(line):
+    # What the live page shows of one transcript line: the agent's text, tool calls, tool results and the prompts
+    # it was given. Everything else (system prompts, API requests, attachments, thinking) is dropped.
+    if b'"type":"user"' not in line and b'"type":"assistant"' not in line:
+        return []
+    try:
+        d = json.loads(line)
+    except ValueError:
+        return []
+    if not isinstance(d, dict) or d.get("type") not in ("user", "assistant") or d.get("isMeta") \
+            or d.get("isCompactSummary"):
+        return []
+    who = d["type"]
+    msg = d.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+    out = []
+    for b in content if isinstance(content, list) else []:
+        kind = b.get("type") if isinstance(b, dict) else None
+        if kind == "text" and isinstance(b.get("text"), str):
+            text = REMINDER_RE.sub("", b["text"]).strip()
+            if text:
+                out.append({"k": "text" if who == "assistant" else "prompt", "text": _clip(text, 20000)})
+        elif kind == "tool_use" and who == "assistant":
+            inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+            key = next((k for k in TOOL_ARGS if isinstance(inp.get(k), str)), None) or \
+                next((k for k, v in inp.items() if isinstance(v, str)), None)
+            e = {"k": "tool", "id": str(b.get("id", ""))[:100], "name": str(b.get("name", ""))[:80],
+                 "arg": _clip(inp[key], 600) if key else ""}
+            if key in PATH_ARGS:
+                e["path"] = inp[key][:4096]
+            out.append(e)
+        elif kind == "tool_result" and who == "user":
+            c = b.get("content")
+            parts = [{"type": "text", "text": c}] if isinstance(c, str) else [x for x in c if isinstance(x, dict)] if isinstance(c, list) else []
+            text = REMINDER_RE.sub("", "\n".join(str(x.get("text", "")) for x in parts if x.get("type") == "text")).strip()
+            e = {"k": "result", "for": str(b.get("tool_use_id", ""))[:100], "text": _clip(text, 8000),
+                 "error": bool(b.get("is_error"))}
+            images = sum(1 for x in parts if x.get("type") == "image")
+            if images:
+                e["images"] = images
+            out.append(e)
+    return out
+
+
+def read_conversation(path, offset, raw_cap=16 << 20, out_cap=256 << 10):
+    # Whole lines from a byte offset; a line still being written waits for the next poll. Capped both ways.
+    entries, used, reset = [], 0, False
+    with open(str(path), "rb") as f:
+        end = f.seek(0, 2)
+        if offset > end:
+            offset, reset = 0, True
+        start = offset
+        f.seek(offset)
+        while offset < end and used < out_cap and offset - start < raw_cap:
+            line = f.readline()
+            if not line.endswith(b"\n"):
+                break
+            offset += len(line)
+            got = conversation_entries(line)
+            entries += got
+            used += sum(len(json.dumps(e)) for e in got)
+    more = offset < end and (used >= out_cap or offset - start >= raw_cap)
+    return {"entries": entries, "next": offset, "more": more, "reset": reset}
+
+
+VIEW_IMAGES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+               ".webp": "image/webp", ".svg": "image/svg+xml"}
+VIEW_CAPS = {"image": 25 << 20, "text": 2 << 20}
+
+
+def task_folder(r, tid, cap=300):
+    # Every file in a task's folder (its notes, screenshots and the like) as {name, size}, hidden files left out.
+    base, out = r.task_dir(tid), []
+    for d, dirs, names in os.walk(str(base)):
+        dirs[:] = sorted(x for x in dirs if not x.startswith("."))
+        for n in sorted(x for x in names if not x.startswith(".")):
+            p = Path(d) / n
+            try:
+                size = p.lstat().st_size
+            except OSError:
+                continue
+            out.append({"name": p.relative_to(base).as_posix(), "size": size})
+            if len(out) >= cap:
+                return out
+    return out
+
+
+def view_path(r, raw, tid="", folder=False):
+    # A file the live page may show: under the project, the run's worktrees or the run folder once symlinks are
+    # resolved. No "~", no "..". A relative path is looked up in the task's folder (`folder`), or in its worktree
+    # and then the project. None when refused or missing.
+    if not raw or len(raw) > 4096 or "\0" in raw or raw.startswith("~") or ".." in Path(raw).parts \
+            or (tid and not re.fullmatch(r"[A-Za-z0-9_-]+", tid)):
+        return None
+    p = Path(raw)
+    if folder:
+        if not tid or p.is_absolute():
+            return None
+        cands = [r.task_dir(tid) / p]
+    else:
+        cands = [p] if p.is_absolute() else ([r.wt(tid) / p] if tid else []) + [r.project / p]
+    roots = [x.resolve() for x in (r.project, r.brain / "wt", r.dir)]
+    for c in cands:
+        try:
+            real = c.resolve()
+        except (OSError, RuntimeError):
+            continue
+        if any(x in real.parents for x in roots) and real.is_file():
+            return real
+    return None
+
+
+def view_kind(p):
+    if p.suffix.lower() in VIEW_IMAGES:
+        return "image"
+    with open(str(p), "rb") as f:
+        head = f.read(8192)
+    return "binary" if b"\0" in head else "markdown" if p.suffix.lower() == ".md" else "text"
+
+
 def view_state(r):
     data = r.load()
     st = r.state()
     for t in data["tasks"]:
         kd = r.task_dir(t["id"])
         t["files_present"] = [f for f in TASK_FILES if nonempty(kd / f)] + sorted(p.name for p in kd.glob("audit-*.md"))
+        t["folder"] = task_folder(r, t["id"])
+        t["sessions"] = task_sessions(t)
     data["plan_present"] = nonempty(r.dir / "plan.md")
     data["plan_audits"] = sorted(p.name for p in r.dir.glob("plan-audit-*.md"))
     data["scheduler_alive"] = alive(st.get("scheduler_pid"))
     data["agents"] = st.get("agents") or {}
+    data["waiting"] = owner_actions(r, data, data["scheduler_alive"])
     data["summary"] = summary(data, data["scheduler_alive"])
     data["now"] = now()
     data["project"] = r.project.name
@@ -1623,6 +2045,8 @@ def cmd_viewer(a):
     pref = 7400 + int(hashlib.sha1(str(r.dir).encode()).hexdigest(), 16) % 500
     port = free_port(pref)
     origin = "http://127.0.0.1:%d" % port
+    hosts = ("127.0.0.1:%d" % port, "localhost:%d" % port)
+    found = {}  # session id -> transcript path
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -1641,8 +2065,21 @@ def cmd_viewer(a):
             q = parse_qs(u.query)
             if u.path in ("/", "/index.html"):
                 return self.send(200, (ROOT / "viewer" / "index.html").read_bytes(), "text/html")
-            if u.path in ("/logo.svg",):
-                return self.send(200, (ROOT / "assets" / "logo.svg").read_bytes(), "image/svg+xml")
+            if u.path.startswith("/assets/"):
+                # Brand files only: read-only, inside assets/, known types.
+                types = {".svg": "image/svg+xml", ".woff2": "font/woff2", ".css": "text/css; charset=utf-8"}
+                base = (ROOT / "assets").resolve()
+                p = (base / u.path[len("/assets/"):]).resolve()
+                if not re.match(r"^/assets/(fonts/)?[A-Za-z0-9_-]+(\.[A-Za-z0-9]+)+$", u.path) or base not in p.parents \
+                        or p.suffix not in types or not p.is_file():
+                    return self.send(404, "{}")
+                body = p.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", types[p.suffix])
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                return self.wfile.write(body)
             if u.path == "/api/state":
                 try:
                     return self.send(200, json.dumps(view_state(r)))
@@ -1654,6 +2091,61 @@ def cmd_viewer(a):
                     return self.send(400, "bad request", "text/plain")
                 p = (r.task_dir(tid) if tid else r.dir) / name
                 return self.send(200, p.read_text() if p.exists() else "", "text/plain")
+            if u.path == "/api/view":
+                # One file for the page's viewer, read-only: `meta=1` for its name, size and kind, else its bytes.
+                # SVG goes to an <img> as an image; nothing served here may run script.
+                if self.headers.get("Host") not in hosts:
+                    return self.send(403, json.dumps({"error": "forbidden"}))
+                tid = q.get("task", [""])[0]
+                p = view_path(r, q.get("path", [""])[0], tid, q.get("in", [""])[0] == "folder")
+                if not p:
+                    return self.send(404, json.dumps({"error": "not a file of this run"}))
+                try:
+                    size, kind = p.stat().st_size, view_kind(p)
+                except OSError:
+                    return self.send(404, json.dumps({"error": "not a file of this run"}))
+                ok = kind != "binary" and size <= VIEW_CAPS["image" if kind == "image" else "text"]
+                if "meta" in q:
+                    return self.send(200, json.dumps({"name": p.name, "path": str(p), "size": size, "kind": kind, "ok": ok}))
+                if not ok:
+                    return self.send(413, json.dumps({"error": "can't preview"}))
+                with open(str(p), "rb") as f:
+                    body = f.read(size)
+                if kind != "image":
+                    body = body.decode("utf-8", "replace").encode()
+                self.send_response(200)
+                self.send_header("Content-Type", VIEW_IMAGES.get(p.suffix.lower(), "text/plain; charset=utf-8"))
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+                self.end_headers()
+                return self.wfile.write(body)
+            if u.path == "/api/conversation":
+                # One agent's conversation from a byte offset, reduced to what the page shows. Looked up by id only,
+                # and only for sessions of this run's tasks.
+                sid, agent, off = (q.get(k, [""])[0] for k in ("session", "agent", "offset"))
+                if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", sid) \
+                        or (agent and not re.fullmatch(r"agent-[0-9a-f]{1,64}", agent)) or not re.fullmatch(r"\d{0,15}", off):
+                    return self.send(400, json.dumps({"error": "bad request"}))
+                try:
+                    data = r.load()
+                except Fail as e:
+                    return self.send(410, json.dumps({"error": str(e)}))
+                if not any(s["session"] == sid for t in data["tasks"] for s in task_sessions(t)):
+                    return self.send(403, json.dumps({"error": "not a session of this run"}))
+                main = found.get(sid)
+                main = main if main and main.is_file() else transcript(sid)
+                if not main:
+                    return self.send(404, json.dumps({"error": "no transcript yet"}))
+                found[sid] = main
+                agents = subagents(main)
+                p = main.parent / main.stem / "subagents" / ("%s.jsonl" % agent) if agent else main
+                if agent and (agent not in [x["agent"] for x in agents] or TRANSCRIPTS.resolve() not in p.resolve().parents):
+                    return self.send(404, json.dumps({"error": "no such subagent"}))
+                reply = read_conversation(p, int(off or 0))
+                reply["agents"] = agents
+                return self.send(200, json.dumps(reply))
             self.send(404, "{}")
 
         def do_POST(self):
@@ -1663,7 +2155,7 @@ def cmd_viewer(a):
             act = urlparse(self.path).path
             try:
                 if act == "/api/approve":
-                    do_approve(r)
+                    approve_with(r, body.get("answers") or [], (body.get("comment") or "").strip())
                 elif act == "/api/accept":
                     do_accept(r, body["task"])
                 elif act == "/api/answer":
@@ -1672,10 +2164,12 @@ def cmd_viewer(a):
                     do_pause(r)
                 elif act == "/api/resume":
                     do_resume(r)
+                elif act == "/api/todo":
+                    do_todo_done(r, int(body["n"]))
                 else:
                     return self.send(404, "{}")
                 self.send(200, json.dumps({"ok": True}))
-            except (Fail, KeyError) as e:
+            except (Fail, KeyError, ValueError, TypeError) as e:
                 self.send(400, json.dumps({"error": str(e)}))
 
     def stop(*_):
@@ -1745,6 +2239,18 @@ def compose(cfg, rows, work, dest_base):
     return outs
 
 
+def shots_dir(r):
+    tid = os.environ.get("COORD_TASK")
+    if not tid:
+        ids = sorted((t["id"] for t in r.load()["tasks"] if t["id"].startswith("S")), key=lambda i: int(i[1:]) if i[1:].isdigit() else 0)
+        if not ids:
+            raise Fail("this run has no shots task; start one with coord shots")
+        tid = ids[-1]
+    d = r.task_dir(tid)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def cmd_shoot(a):
     r = pick_run(a.run)
     cfg, dev = r.cfg, r.cfg["dev"]
@@ -1759,8 +2265,7 @@ def cmd_shoot(a):
     run_wt = ensure_run_wt(r, data)
     servers, urls = [], {}
     (r.brain / "logs").mkdir(parents=True, exist_ok=True)
-    work = r.brain / "shots" / dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    work.mkdir(parents=True, exist_ok=True)
+    work = shots_dir(r)
     try:
         for label, wt in (("before", base_wt), ("after", run_wt)):
             port = free_port()
@@ -1785,8 +2290,9 @@ def cmd_shoot(a):
                         shoot(cfg, urls[label] + path, f, w, shots["height"], theme, shots["wait_ms"])
                         files[label] = f
                     rows.append((path, w, theme, files))
-        stamp = dt.datetime.now().strftime("%Y-%m-%d %H.%M")
-        dest_base = Path.home() / "Desktop" / ("%s - %s before-after %s" % (r.project.name, r.name, stamp))
+        dest_base = work / "before-after"
+        if (work / "before-after.png").exists() or (work / "before-after part 1.png").exists():
+            dest_base = work / ("before-after " + dt.datetime.now().strftime("%Y-%m-%d %H.%M.%S"))
         for out in compose(cfg, rows, work, dest_base):
             print(out)
     finally:
@@ -1838,12 +2344,18 @@ def main(argv=None):
         p.add_argument("--run")
         p.set_defaults(fn=cmd_simple)
 
+    p = sub.add_parser("todo", help="steps only you can do, recorded by agents; `todo done <n>` marks one done")
+    p.add_argument("action", nargs="?", choices=["done"])
+    p.add_argument("n", nargs="?", type=int)
+    p.add_argument("--run")
+    p.set_defaults(fn=cmd_todo)
+
     p = sub.add_parser("add", help="change the plan or add work; it goes back through the officer and you")
     p.add_argument("text", nargs="+")
     p.add_argument("--run")
     p.set_defaults(fn=cmd_add)
 
-    p = sub.add_parser("shots", help="before/after screenshots of this run, saved to the Desktop")
+    p = sub.add_parser("shots", help="before/after screenshots of this run, saved in the run's task folder")
     p.add_argument("note", nargs="*")
     p.add_argument("--run")
     p.set_defaults(fn=cmd_shots)
@@ -1865,7 +2377,8 @@ def main(argv=None):
     p.set_defaults(fn=cmd_terminate)
 
     p = sub.add_parser("task", help="(agents) update your own task")
-    p.add_argument("action", choices=["show", "list", "start", "review", "done", "ask", "note", "add", "edit", "remove", "design"])
+    p.add_argument("action", choices=["show", "list", "start", "review", "done", "ask", "note", "add", "edit", "remove", "design",
+                                       "followup", "todo"])
     p.add_argument("target", nargs="?")
     p.add_argument("text", nargs="*")
     p.add_argument("--id")
@@ -1879,6 +2392,7 @@ def main(argv=None):
     p.add_argument("--ui", choices=["on", "off"], help="on when the task designs or changes what people see")
     p.add_argument("--source", help="for `design`: the guides' paths, or the owner's words")
     p.add_argument("--external", help="files outside the repo the project's rules require this task to update (absolute paths)")
+    p.add_argument("--repo", help="for `followup`: the other repo's absolute path; coord starts a run there on approval")
     p.set_defaults(fn=cmd_task)
 
     p = sub.add_parser("audit", help="(officer) record a verdict")
@@ -1899,10 +2413,12 @@ def main(argv=None):
         p.add_argument("--run", required=True)
         p.set_defaults(fn=fn)
 
-    a = ap.parse_args(argv)
-    if a.cmd == "task" and a.action in ("ask", "note"):
-        a.text = ([a.target] if a.target else []) + a.text
-        if not a.text:
+    a, extra = ap.parse_known_args(argv)
+    if extra and not (a.cmd == "task" and a.action == "followup"):
+        ap.error("unrecognized arguments: %s" % " ".join(extra))
+    if a.cmd == "task" and a.action in ("ask", "note", "followup", "todo"):
+        a.text = ([a.target] if a.target else []) + a.text + extra
+        if not a.text and a.action != "followup":
             ap.error("say what: coord task %s \"...\"" % a.action)
     try:
         code = a.fn(a)

@@ -44,4 +44,8 @@ the number of cards, and what is left as stubs.
 
 - Read narrowly; send long output to a log file and read its tail.
 - If a tool call is blocked with "The run is paused", run `coord task note "<exact next step>"` and end your turn.
+- Every screenshot, image, page, report or other artifact you make stays on this machine, in your task's folder
+  (the folder of your knowledge file, `.coordinator/<run>/tasks/<id>/`): never the Desktop, never uploaded or
+  published (no Artifact tool, docs services, gists, pastebins or image APIs). Deleting the run's folder cleans
+  everything up. The map itself still goes in `.coordinator/map/`.
 - Never publish, push or commit anything.

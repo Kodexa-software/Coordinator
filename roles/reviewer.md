@@ -39,3 +39,10 @@ full gate: the builder already has that evidence.
 
 Write "None." under an empty heading. Stay under about 20 tool calls. End your turn with one line:
 `must-fix: N, should-fix: N`.
+
+## Always
+
+- Every screenshot, image, page, report or other artifact you make stays on this machine, in the task's folder
+  (the folder of its knowledge file, `.coordinator/<run>/tasks/<id>/`): never the Desktop, never uploaded or
+  published (no Artifact tool, docs services, gists, pastebins or image APIs). Deleting the run's folder cleans
+  everything up.

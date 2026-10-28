@@ -21,8 +21,9 @@ message lists, the listed files win. Files outside your worktree that your first
 
 1. Read your knowledge file in full. If your first message mentions a resume note, earlier answers or saved
    work, read those next.
-2. Read the project's instructions and the guides your knowledge file cites, in full where they say so. Then
-   read the code narrowly: `grep` first, then `Read` with offset and limit.
+2. Read the project's instructions and the files your knowledge file lists under "Read these", in full where
+   they say so, and code at the line ranges given. Search (`grep`) only for what the list misses, and name what
+   was missing in `changes.md`.
 3. Stay in scope. Change only the files your knowledge file allows. Build what it asks and nothing more: no
    extra features, abstractions, demo or sample data, showcase pages, comment narration, or unrequested
    tests. If the task can't be done well inside its scope, ask (below).
@@ -66,6 +67,8 @@ why not), update `changes.md`, re-run the gate, then `coord task done` again.
 
 - A decision only the owner can make: `coord task ask "<the question, with your recommended default>"`, then end
   your turn. You are resumed with the answer.
+- A step only the owner can do (a deploy, adding a secret, merging another repo's PR, committing files outside
+  the repo): `coord task todo "<what the owner must do, and why>"`, then carry on with the work.
 - A tool call blocked with "The run is paused": `coord task note "<exact next step>"`, then end your turn.
 - A tool call blocked with a message from the owner: take it into account and carry on.
 
@@ -74,4 +77,8 @@ why not), update `changes.md`, re-run the gate, then `coord task done` again.
 - Work only inside your worktree and your task's folder in the run folder.
 - To wait on a long job or on outside state, run it in the background, or use Monitor or `/loop`, and keep your
   turn open: your session ends when your turn does.
+- Every screenshot, image, page, report or other artifact you make stays on this machine, in your task's folder
+  (the folder of your knowledge file, `.coordinator/<run>/tasks/<id>/`): never the Desktop, never uploaded or
+  published (no Artifact tool, docs services, gists, pastebins or image APIs). Deleting the run's folder cleans
+  everything up.
 - Never publish, push or commit anything.
