@@ -93,6 +93,7 @@ header.top{position:sticky;top:0;z-index:5;background:var(--co-bg);
 .s-finished,.s-planned,.s-done{background:var(--co-ok-soft);color:var(--co-ok)}
 .s-audit{background:var(--co-sunken);color:var(--co-ink)}
 .s-paused,.s-skipped,.s-queue{background:var(--co-sunken);color:var(--co-muted)}
+.s-failed{background:var(--co-bad-soft);color:var(--co-bad)}
 .flash{animation:co-fade var(--co-dur-base) var(--co-ease-arrive)}
 
 /* Controls */
@@ -110,6 +111,25 @@ header.top{position:sticky;top:0;z-index:5;background:var(--co-bg);
 .btn svg{flex:none;transition:transform var(--co-dur-quick) var(--co-ease-arrive)}
 .btn.pr:hover svg{transform:translate(2px,-2px)}
 .btn.icon{width:34px;padding:0}
+/* Pull requests: the run's, then its follow-up runs', in merge order. More than one opens a small menu. */
+.pr-wrap{position:relative;display:inline-flex}
+.pr-n{font-variant-numeric:tabular-nums}
+#prs:hover .chev{transform:none}
+#prs[aria-expanded="true"] .chev{transform:rotate(180deg)}
+.pr-menu{position:absolute;top:calc(100% + 8px);right:0;z-index:6;width:max-content;min-width:280px;max-width:min(440px,calc(100vw - 32px));
+  padding:6px;box-shadow:var(--co-shadow-2);animation:co-up var(--co-dur-base) var(--co-ease-arrive)}
+.pr-menu ul{display:grid;gap:2px;margin:0;padding:0;list-style:none}
+.pr-item{display:flex;align-items:center;gap:12px;padding:9px 10px;border-radius:var(--co-radius-md);color:var(--co-ink);text-decoration:none;
+  transition:background-color var(--co-dur-quick) var(--co-ease-arrive)}
+a.pr-item:hover{background:var(--co-sunken)}
+a.pr-item svg{flex:none;color:var(--co-muted)}
+.pr-name{flex:1;min-width:0;display:grid;gap:1px;line-height:1.35}
+.pr-name b{font-weight:600;overflow-wrap:anywhere}
+.pr-name span{color:var(--co-muted);font:0.75rem/1.4 var(--co-font-mono);overflow-wrap:anywhere}
+.pr-list{display:grid;gap:6px;max-width:720px;margin:0 0 12px;padding:0;list-style:none;counter-reset:pr}
+.pr-list li{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:9px 12px;border:1px solid var(--co-line);border-radius:var(--co-radius-md);counter-increment:pr}
+.pr-list li::before{content:counter(pr);flex:none;min-width:12px;color:var(--co-muted);font:600 0.75rem var(--co-font-mono)}
+.pr-why{flex:1 1 100%;padding:6px 10px;border-radius:var(--co-radius-sm);background:var(--co-bad-soft);color:var(--co-bad);font-size:var(--co-text-xs);overflow-wrap:anywhere}
 textarea{display:block;width:100%;min-height:76px;padding:10px 12px;border:1px solid var(--co-muted);border-radius:var(--co-radius-md);
   background:var(--co-surface);color:var(--co-ink);font:inherit;resize:vertical;transition:border-color var(--co-dur-quick) var(--co-ease-arrive)}
 textarea:focus{border-color:var(--co-accent)}
@@ -373,6 +393,8 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
   .rule{display:none}
   .actions{flex-basis:100%;gap:6px}
   .btn{height:32px;padding:0 11px}
+  .pr-wrap{position:static}
+  .pr-menu{left:16px;right:16px;top:calc(100% + 4px);width:auto;min-width:0;max-width:none}
   main{padding:18px 16px 56px}
   .board{grid-template-columns:1fr}
   .plan,.request{padding:20px}
@@ -386,9 +408,10 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
 /* Reduced motion: no keyframed movement, short fades at most */
 @media (prefers-reduced-motion:reduce){
   .brand .co-row1,.brand .co-row2,.brand .co-row3{animation:none}
-  .title,.enter,.view-in,.btn.pr,.btn.waits,.pc-sec,.settle-in{animation-name:co-fade}
+  .title,.enter,.view-in,.btn.pr,.btn.waits,.pc-sec,.settle-in,.pr-menu{animation-name:co-fade}
   .task:hover,.btn:active{transform:none}
   .btn.pr:hover svg{transform:none}
+  #prs .chev{transition:none}
   .tabs.ready::after{transition:none}
   .c-res details>summary::after,.c-prompt>summary::before{transition:none}
   aside{transform:none;opacity:0;transition:opacity var(--co-dur-quick) linear,visibility 0s linear var(--co-dur-quick)}
@@ -418,6 +441,11 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
       <button class="btn waits" id="w-jump" hidden><span class="w-n" id="w-n">0</span> waiting on you</button>
       <a class="btn pr" id="pr" target="_blank" rel="noopener" hidden aria-label="Pull request (opens in a new tab)">Pull request
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M5 11 11 5M6 5h5v5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+      <div class="pr-wrap" id="prs-wrap" hidden>
+        <button class="btn pr" id="prs" aria-expanded="false" aria-controls="prs-menu">Pull requests <span class="pr-n" id="prs-n">0</span>
+          <svg class="chev" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <div class="card pr-menu" id="prs-menu" hidden><ul id="prs-list" aria-label="Pull requests"></ul></div>
+      </div>
       <button class="btn" id="pause" hidden>Pause</button>
       <button class="btn" id="resume" hidden>Resume</button>
     </div>
@@ -473,6 +501,7 @@ const COLS = [["queue","Queued",["queue"]],["work","Working",["in_progress","rev
 const LABEL = {queue:"queued",in_progress:"building",review:"in review",audit:"officer check",waiting_on_you:"waiting on you",
                paused:"paused",done:"done",skipped:"skipped",running:"running",planning:"planning",finished:"finished",planned:"planned"};
 let state = null, drawer = null, drawerFile = null, typing = false, opener = null;
+let mergeSeen = "", mergeN = 0;  // the last merge status seen, for the line shown once the page stops answering
 
 function fmtTok(n){ n = n||0; return n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1e3 ? Math.round(n/1e3)+"K" : String(n); }
 function fmtMin(m){ m = Math.round(m||0); return m >= 60 ? Math.floor(m/60)+"h "+String(m%60).padStart(2,"0")+"m" : m+"m"; }
@@ -692,7 +721,7 @@ const KIND = {plan:"Plan", question:"Question", officer:"Officer stalemate", sta
 const OUT = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M5 11 11 5M6 5h5v5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 function waitItem(s, w){
   const kind = w.kind==="question" && w.question_kind!=="agent" ? w.question_kind : w.kind;
-  const tag = `<span class="w-kind">${KIND[kind]||esc(kind)}${w.task?" · "+esc(w.task):""}</span>`;
+  const tag = `<span class="w-kind">${kind==="pr" && (w.prs||[]).length>1 ? "Pull requests" : KIND[kind]||esc(kind)}${w.task?" · "+esc(w.task):""}</span>`;
   const link = (label) => `<div class="row"><a class="btn primary" href="${esc(w.url)}" target="_blank" rel="noopener" aria-label="${label} (opens in a new tab)">${label} ${OUT}</a></div>`;
   if(w.kind==="plan") return {cls:"card notice plan-card", html:tag+planCard(s)};
   if(w.kind==="question"){ const t = s.tasks.find((x)=>x.id===w.task) || {};
@@ -702,9 +731,48 @@ function waitItem(s, w){
   if(w.kind==="followup") return w.url ? {cls:"card notice", html:tag+`<h3>${esc(w.text)}</h3><p>It plans in its own repo and waits for you there.</p>${link("Open its live page")}`}
     : {cls:"card notice"+(w.failed?" bad":""), html:tag+`<h3>${esc(w.text)}</h3><p>${w.failed?"Start it yourself from that repo with <code>/coordinate</code>.":inline(esc(w.do))}</p>`};
   if(w.kind==="todo") return {cls:"card notice", html:tag+`<p>${inline(esc(w.text))}</p><div class="row"><button class="btn primary" data-act="todo" data-n="${esc(w.n)}">Mark done</button></div>`};
-  if(w.kind==="pr") return {cls:"card notice", html:tag+`<h3>${esc(w.text)}</h3><p>The run is finished.</p>${link("Open the pull request")}`};
+  if(w.kind==="pr") return prCard(w, tag, link);
   if(w.kind==="external") return {cls:"card notice", html:tag+`<h3>Commit the files updated outside the repo</h3><p>Coordinator doesn't commit them.</p><ul class="w-files">${(w.files||[]).map((f)=>`<li><code>${esc(f)}</code></li>`).join("")}</ul>`};
   return {cls:"card notice", html:tag+`<p>${esc(w.text)}</p>`};
+}
+// The pull requests of the run and its follow-up runs (s.prs, w.prs), each with its state in words.
+const isUrl = (u) => /^https?:\/\//.test(u||"");
+const listOf = (a) => a.length < 2 ? a.join("") : a.slice(0,-1).join(", ")+" and "+a[a.length-1];
+function prState(p){
+  return p.merged ? ["merged","s-audit"] : !p.url ? ["no pull request yet","s-queue"] : p.status==="finished" ? ["finished","s-finished"] : ["building","s-running"];
+}
+const prName = (p) => `<span class="pr-name"><b>${esc(p.repo_name)}</b><span>${esc(p.run)}</span></span>`;
+function prItem(p){
+  const [word, cls] = prState(p), pill = `<span class="pill sm ${cls}">${word}</span>`;
+  return `<li>${isUrl(p.url) ? `<a class="pr-item" href="${esc(p.url)}" target="_blank" rel="noopener" aria-label="${esc(p.repo_name)}, ${esc(p.run)}, ${word} (opens in a new tab)">${prName(p)}${pill}${OUT}</a>`
+    : `<div class="pr-item">${prName(p)}${pill}</div>`}</li>`;
+}
+function prMenu(open, back){
+  const b = $("#prs"); if(open === (b.getAttribute("aria-expanded")==="true")) return;
+  b.setAttribute("aria-expanded", open); $("#prs-menu").hidden = !open;
+  if(!open && back) b.focus({preventScroll:true});
+}
+// A first run's card lists the family in merge order and, once all are finished, asks to merge them all.
+// A follow-up run's card keeps its own pull request: merge all is done from the first run.
+function prCard(w, tag, link){
+  if(w.parent) return {cls:"card notice", html:tag+`<h3>${esc(w.text)}</h3><p>The run is finished. Merge all is done from the first run, <code>${esc(w.parent.run)}</code>.</p>${link("Open the pull request")}`};
+  const prs = w.prs||[], m = w.merge||{}, steps = m.steps||[], n = prs.length;
+  const result = (p) => (steps.find((x)=>x.run===p.run && x.repo_name===p.repo_name)||{}).result || "";
+  const now = m.status==="merging" ? prs.findIndex((p)=>!result(p)) : -1;
+  const rows = prs.map((p, i)=>{
+    const res = result(p), failed = /^failed/.test(res);
+    const [word, cls] = res ? (failed ? ["failed","s-failed"] : [res,"s-done"]) : i===now ? ["merging","s-running"] : prState(p);
+    return `<li>${prName(p)}<span class="pill sm ${cls}">${esc(word)}</span>${isUrl(p.url) ? `<a class="btn sm" href="${esc(p.url)}" target="_blank" rel="noopener" aria-label="Open the pull request of ${esc(p.repo_name)} (opens in a new tab)">Open ${OUT}</a>` : ""}${failed ? `<span class="pr-why">${esc(res.replace(/^failed:?\s*/,""))}</span>` : ""}</li>`;
+  }).join("");
+  let head = esc(w.text), line, act = "", cls = "card notice";
+  if(m.status==="merging"){ head = `Merging ${n>1?"the pull requests":"the pull request"}`; line = "Every run ends once all are merged."; }
+  else if(m.status==="done"){ head = n>1 ? "All pull requests are merged" : "The pull request is merged"; line = "Ending every run."; }
+  else if(m.status==="failed"){ cls += " bad"; line = esc("The merge stopped" + (m.error ? ": "+m.error : ".")); act = "Try again"; }
+  else if(w.ready){ line = `${n>1?"They merge in this order, then every run ends":"It merges, then the run ends"}. Branches and knowledge are kept.`; act = "Approve"; }
+  else if((w.waiting_for||[]).length) line = `Merge all is offered when ${listOf(w.waiting_for.map((x)=>`<code>${esc(x)}</code>`))} finish${w.waiting_for.length>1?"":"es"}.`;
+  else line = "The run is finished.";
+  return {cls, html:tag+`<h3>${head}</h3><p>${line}</p>${n?`<ol class="pr-list">${rows}</ol>`:""}` +
+    (act ? `<div class="row"><button class="btn primary" data-act="merge">${act}</button></div>` : n ? "" : link("Open the pull request"))};
 }
 // The panel eases between heights as items come and go, so the page below glides instead of jumping.
 function fit(change){
@@ -746,7 +814,12 @@ function render(s){
   if(wn.textContent !== String(n)){ wn.textContent = n; replay(wn, "flash"); }
   $("#name").textContent = s.name;
   setHTML($("#sub"), `${esc(s.project)} · ${s.mode==="plan"?"plan only":`run branch <code>${esc(s.branch)}</code>`} · from <code>${esc(s.base)}</code>`);
-  const pr = $("#pr"); pr.hidden = !s.pr_url; if(s.pr_url && pr.getAttribute("href")!==s.pr_url) pr.setAttribute("href", s.pr_url);
+  const prs = s.prs||[], many = prs.length > 1 && prs.some((p)=>p.url);
+  const pr = $("#pr"); pr.hidden = many || !s.pr_url; if(s.pr_url && pr.getAttribute("href")!==s.pr_url) pr.setAttribute("href", s.pr_url);
+  $("#prs-wrap").hidden = !many; if(!many) prMenu(false);
+  $("#prs-n").textContent = prs.length; setHTML($("#prs-list"), prs.map(prItem).join(""));
+  const pw = (s.waiting||[]).find((w)=>w.kind==="pr");
+  mergeSeen = ((s.merge && s.merge.status) ? s.merge : (pw && pw.merge) || {}).status || ""; mergeN = prs.length;
   const st = $("#status"), cls = "pill s-"+s.status; if(st.className !== cls) st.className = cls; st.textContent = LABEL[s.status] || s.status;
   const work = s.tasks.filter((t)=>["build","merge"].includes(t.type));
   const done = work.filter((t)=>["done","skipped"].includes(t.status)).length;
@@ -974,6 +1047,9 @@ function showTab(tab){
 }
 
 document.addEventListener("click", async (e)=>{
+  const menu = $("#prs").getAttribute("aria-expanded")==="true", focus = document.activeElement;
+  if(menu && !e.target.closest("#prs-wrap")) prMenu(false, !focus || focus===document.body);
+  if(e.target.closest("#prs")) return prMenu(!menu);
   const b = e.target.closest("[data-path],[data-view],#v-close,#v-back,#w-jump,[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],[data-settle],[data-unsettle],#d-close,#pause,#resume");
   if(!b) return;
   if(b.id==="v-close" || b.id==="v-back") return closeViewer();
@@ -994,6 +1070,7 @@ document.addEventListener("click", async (e)=>{
   if(act==="approve-plan" || act==="send-plan") return sendPlan(b);
   if(act==="resume") return api("/api/resume");
   if(act==="accept") return api("/api/accept",{task:b.dataset.task});
+  if(act==="merge"){ b.disabled = true; try{ await api("/api/merge"); } finally { b.disabled = false; } return; }
   if(act==="todo"){ b.disabled = true; try{ await api("/api/todo",{n:+b.dataset.n}); } finally { b.disabled = false; } return; }
   if(act==="answer"){ const ta = document.querySelector(`textarea[data-answer="${CSS.escape(b.dataset.task)}"]`); if(!ta.value.trim()) return ta.focus();
     typing=false; return api("/api/answer",{task:b.dataset.task,text:ta.value.trim()}); }
@@ -1015,6 +1092,7 @@ document.addEventListener("input", planInput);
 document.addEventListener("change", planInput);
 document.addEventListener("keydown",(e)=>{
   if(e.key==="Escape" && viewerOpen()) return closeViewer();
+  if(e.key==="Escape" && $("#prs").getAttribute("aria-expanded")==="true") return prMenu(false, true);
   if(e.key==="Escape" && drawer) return closeDrawer();
   // Focus stays inside the viewer while it is open.
   if(e.key==="Tab" && viewerOpen()){
@@ -1035,11 +1113,16 @@ $("#board").innerHTML = COLS.map(([key,label])=>`<section class="col" id="col-${
 placeBar($("#tabs"), true);
 document.fonts && document.fonts.ready.then(()=>placeBar($("#tabs"), true));
 
+// After a merge all, the page stops answering because the session ended: say how it ended.
+function ended(line){
+  setHTML($("#sub"), mergeSeen==="done" ? (mergeN>1 ? "The pull requests were merged and the session ended." : "The pull request was merged and the session ended.")
+    : mergeSeen==="merging" ? "The session ended during the merge. Check that every pull request merged." : line);
+}
 async function refresh(){
-  try{ const r = await fetch("/api/state",{cache:"no-store"}); if(r.status===410){ setHTML($("#sub"), "This coordinator was terminated."); return; }
+  try{ const r = await fetch("/api/state",{cache:"no-store"}); if(r.status===410) return ended("This coordinator was terminated.");
        const s = await r.json(); if(planReady(s) && !typing) planSrc = await text("", "plan.md");
        render(s); if(!$("#tab-plan").hidden) renderPlan(); }
-  catch(e){ setHTML($("#sub"), "The coordinator is not answering. It may have been terminated."); }
+  catch(e){ ended("The coordinator is not answering. It may have been terminated."); }
 }
 refresh().then(()=>{ const tab = location.hash.slice(1); if(["plan","request"].includes(tab)) showTab(tab); });
 setInterval(refresh, 3000);

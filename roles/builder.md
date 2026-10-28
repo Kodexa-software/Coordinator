@@ -36,7 +36,12 @@ message lists, the listed files win. Files outside your worktree that your first
    - **on** (the owner asked): write only the few tests your knowledge file names. Short, logical, one
      behaviour each; no padding, no duplicated cases, no trivial assertions.
 6. Build it. Run the relevant existing checks as you go. At the end, run the full gate once, with its output in a log
-   file; read only the tail. Fix until it passes.
+   file; read only the tail. Fix until it passes. Save tokens two ways:
+   - repetitive or bulk work (the same edit across many files, scraping, extracting data, generating files): write
+     a small script in the worktree or the task folder, run it and check its result; don't do it call by call;
+   - big content to read (anything you'd otherwise read in many chunks, and a script's output files): spawn
+     `coord-briefer` (Agent tool, `subagent_type: coord-briefer`) with what to read, the question, and a brief path
+     in your task folder. Read the brief, then open the source lines it cites before relying on them.
 7. Write `changes.md` next to your knowledge file:
    - what changed and why, in a few lines;
    - every file you changed or created;

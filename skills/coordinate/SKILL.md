@@ -1,7 +1,7 @@
 ---
 name: coordinate
 description: Conduct a background team of Claude Code agents in the current git project - a planner, a hallucination officer, builders in parallel worktrees and reviewers - from one request. Only when the user types /coordinate.
-argument-hint: <request> | plan <goal> | status | update | approve | answer <task> <text> | tell <task> <text> | add <text> | pause | resume | run | shots [note] | accept <task> | retry <task> | stop <task> | list | terminate [--purge]
+argument-hint: <request> | plan <goal> | status | update | approve | answer <task> <text> | tell <task> <text> | add <text> | pause | resume | run | shots [note] | accept <task> | retry <task> | stop <task> | list | merge | terminate [--purge]
 disable-model-invocation: true
 ---
 
@@ -32,11 +32,12 @@ lines:
 | `accept <task>`, `retry <task>`, `stop <task>` | `coord <command> <task>` |
 | `todo` | `coord todo` (the steps only the owner can do, recorded by agents) |
 | `todo done <n>` | `coord todo done <n>` |
+| `merge` | `coord merge` (merges every pull request of the run and its follow-up runs, then ends them all), then relay its summary |
 | `terminate [--purge]` | `coord terminate [--purge]`, then relay its summary |
 | `update` | `coord update`, then relay its line (a new session loads a new version) |
 
 Name the run when the project has more than one coordinator and the owner named one: `coord <command> <name>`
-for `status`, `wait`, `approve`, `pause`, `resume`, `run` and `terminate`, and `--run <name>` for the rest.
+for `status`, `wait`, `approve`, `pause`, `resume`, `run`, `merge` and `terminate`, and `--run <name>` for the rest.
 
 `plan <goal>` starts a plan-only run (goals, milestones, tasks for later runs). Anything else starts a new run.
 
@@ -69,7 +70,10 @@ re-arm it after the owner acts (`answer`, `accept`, `add`, `approve`, `resume`):
   For an officer stalemate the owner may instead say to accept it: `coord accept <task>`. Re-arm the wait.
 - **A manual step** (a deploy, a secret, another repo's PR): when the owner says it's done, `coord todo done <n>`.
 - **finished:** report in at most 6 lines: the tasks done, the run branch, the time and tokens per task. The list
-  holds the pull request to merge and any files to commit outside the repo. Ask whether to `terminate`.
+  holds the pull request to merge and any files to commit outside the repo. When the pull-request item asks to
+  merge all, ask the owner that question; on yes, run `coord merge` and relay its summary. The live page has the
+  same Approve button. Otherwise ask whether to `terminate`. With follow-up runs, once every run has finished,
+  run `coord status --text <first run>` in the first run's repo and ask there.
 - **paused / planned:** say so in one line.
 - **The scheduler stopped:** say so, and offer `coord resume`. Re-arm the wait after it.
 
@@ -84,6 +88,10 @@ and name the run, as above. When the owner approved on the live page instead, th
 ## Rules
 
 - The owner's words go to `coord` unchanged. Feedback about a running task goes through `coord tell`.
+- Never decide for the owner. Run `approve`, `accept`, `answer`, `merge` and `terminate` only when the owner says
+  so in this conversation, for that run. Defaults, earlier approvals and the parent run's approval never count. A
+  follow-up run's plan waits for its own approval, even though its request says the first run's plan was approved.
+- After you ask the owner (PLAN READY, a question, merge all), end your turn and wait for their reply.
 - Don't open the run's files to report on them; `coord status --text` and `coord wait` print what you need.
 - You may use `/loop` when you need to watch something over time that `coord wait` doesn't cover, such as a
   pull request's checks.

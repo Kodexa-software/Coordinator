@@ -102,6 +102,7 @@ any file or image, approve the plan with an answer per question, and see everyth
 | `/coordinate todo` / `todo done <n>` | Manual steps only you can do / mark one done |
 | `/coordinate accept T3` / `retry T3` / `stop T3` | Settle a task / start it fresh / skip it |
 | `/coordinate update` | Update Coordinator |
+| `/coordinate merge` | Merge every pull request of the run and its follow-up runs, then end them all |
 | `/coordinate terminate` | End the run; keep the branch and the knowledge |
 | `coord map [areas]` | Build or refresh the project map that planners read first |
 

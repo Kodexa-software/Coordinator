@@ -35,6 +35,8 @@ STORE = ".coordinator"
 WORK = ("build", "merge")
 OPEN = ("queue", "in_progress", "review", "audit")
 WAIT_STATES = ("waiting_on_you", "finished", "planned", "paused")
+AGENT_CMDS = ("task", "audit", "_shoot", "_hook", "_scheduler", "_viewer", "status", "list", "wait")
+OWNER_ONLY = "Only the owner can do this. Ask with `coord task ask`."
 TASK_FILES = ("knowledge.md", "changes.md", "review.md", "resume.md")
 ROLE_NAMES = {"planner": "planner", "builder": "builder", "officer": "hallucination officer", "shooter": "screenshot taker",
               "mapper": "mapper"}
@@ -48,9 +50,10 @@ DEFAULTS = {
     "dev": {"command": "", "cwd": ".", "ready_path": "/"},
     "shots": {"widths": [1280, 390], "themes": ["light", "dark"], "height": 900, "wait_ms": 1500},
     "models": {"planner": "opus", "builder": "opus", "reviewer": "opus", "officer": "opus", "shooter": "haiku",
-               "mapper": "opus"},
+               "mapper": "opus", "briefer": "sonnet"},
     "efforts": {"planner": "high", "builder": "high", "reviewer": "medium", "officer": "high",
-                "officer_task": "medium", "shooter": "low", "mapper": "medium"},
+                "officer_task": "medium", "shooter": "low", "mapper": "medium",
+                "briefer": "low"},
     "officer": {"plan": True, "tasks": True, "max_rounds": 3},
     "permission_mode": "auto",
     "deny": [
@@ -494,13 +497,77 @@ def owner_actions(r, data, scheduler_alive=None):
         if not x.get("done"):
             add("todo-%d" % x["n"], "todo", x["text"], "when it's done: `coord todo done %d`" % x["n"], n=x["n"], task=x.get("task", ""))
     if data["status"] == "finished":
-        if data.get("pr_url"):
-            add("pr", "pr", "Review and merge the pull request", data["pr_url"], url=data["pr_url"])
+        if data.get("parent"):
+            if data.get("pr_url") and not data.get("pr_merged"):
+                top = first_run(data)
+                add("pr", "pr", "Review and merge the pull request", "%s; to merge all, run `coord merge %s` in %s" % (
+                    data["pr_url"], top["run"], top["repo"]), url=data["pr_url"], parent=data["parent"])
+        else:
+            prs = pull_requests(r, data)
+            urls = [p["url"] for p in prs if p["url"]]
+            if urls and not all(p["merged"] for p in prs):
+                ready, waiting_for = merge_ready(r, data, prs)
+                merge = data.get("merge") or {}
+                text = "Review and merge the pull request" + ("s" if len(prs) > 1 else "")
+                do = ", ".join(urls)
+                if ready:
+                    text = "Merge all %d pull requests and end the session?" % len(prs) if len(prs) > 1 else \
+                        "Merge the pull request and end the session?"
+                    do = "`coord merge` (merges them in order, then ends every run), or merge them yourself"
+                    if merge.get("status") == "failed":
+                        do += " (the last merge failed: %s)" % merge.get("error")
+                add("pr", "pr", text, do, url=data.get("pr_url") or urls[0], prs=prs, ready=ready,
+                    waiting_for=waiting_for, merge=merge)
         external = sorted({f for t in data["tasks"] if t.get("status") == "done" for f in (t.get("external") or [])})
         if external:
             add("external", "external", "Commit the files updated outside the repo (coord doesn't commit them)",
                 ", ".join(external), files=external)
     return out
+
+
+def pull_requests(r, data):
+    """The run's pull request, then its follow-up runs', depth first. Read from disk only, never from GitHub."""
+    out, seen = [], set()
+
+    def walk(repo, name, d, own):
+        key = (str(Path(repo).resolve()), name)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(dict(repo=key[0], repo_name=Path(repo).name, run=name, url=d.get("pr_url") or "",
+                        status=d.get("status") or "", merged=bool(d.get("pr_merged")), self=own))
+        for f in d.get("followups") or []:
+            if f.get("status") == "started" and f.get("run"):
+                fu = read_json(Path(f["repo"]) / STORE / f["run"] / "tasks.json")
+                if fu:
+                    walk(f["repo"], f["run"], fu, False)
+
+    walk(r.project, r.name, data, True)
+    return out
+
+
+def first_run(data):
+    """The {repo, run} at the top of a follow-up run's parent links."""
+    top, p, seen = None, data.get("parent"), set()
+    while p and (p["repo"], p["run"]) not in seen:
+        seen.add((p["repo"], p["run"]))
+        top = p
+        p = (read_json(Path(p["repo"]) / STORE / p["run"] / "tasks.json") or {}).get("parent")
+    return top
+
+
+def merge_ready(r, data, prs=None):
+    """(ready, waiting_for) for "merge all": a first run, every family run finished with a pull request, no merge running."""
+    prs = prs if prs is not None else pull_requests(r, data)
+    waiting_for = [p["run"] for p in prs if p["status"] != "finished" or not p["url"]]
+    merge = data.get("merge") or {}
+    busy = merge.get("status") == "merging" and alive(merge.get("pid"))
+    return not data.get("parent") and not waiting_for and not busy, waiting_for
+
+
+def other_repo_env():
+    # For coord started in another repo: none of this run's agent variables
+    return {k: v for k, v in os.environ.items() if k not in ("COORD_PROJECT", "COORD_RUN_DIR", "COORD_TASK", "COORD_ROLE")}
 
 
 # ---------------------------------------------------------------- agents
@@ -523,7 +590,14 @@ def write_agent_files(r):
         "description": "Fresh code reviewer for one coordinator task: reads the task's knowledge file, "
                        "its changes.md and the diff, then writes review.md.",
         "prompt": role_prompt("reviewer"),
-        "model": r.cfg["models"]["reviewer"]}}
+        "model": r.cfg["models"]["reviewer"]},
+        "coord-briefer": {
+        "description": "Reads big content (long files, logs, script outputs, scraped data) on a smaller model and "
+                       "writes a short brief for the agent that called it.",
+        "prompt": role_prompt("briefer"),
+        "model": r.cfg["models"]["briefer"],
+        "effort": r.cfg["efforts"]["briefer"],
+        "tools": ["Read", "Grep", "Glob", "Bash", "Write"]}}
     write_json(r.brain / "agents.json", agents)
     hook = '"%s" "%s" _hook' % (sys.executable, ROOT / "bin" / "coord")
     settings = {"permissions": {"deny": list(r.cfg["deny"])},
@@ -714,8 +788,8 @@ def start_job(r, kind, tid):
         effort = cfg["efforts"]["officer"] if t["type"] == "plan" else cfg["efforts"].get("officer_task", "medium")
         cmd = [cfg["claude"], "-p"] + add_dirs(r, cwd) + ["--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
                "--settings", r.brain / "settings.json", "--output-format", "json", "-n", "%s:%s:officer" % (r.name, tid),
-               "--append-system-prompt", role_prompt("officer"), "--session-id", sid,
-               audit_prompt(r, data, t)]
+               "--append-system-prompt", role_prompt("officer"), "--agents", r.brain / "agents.json",
+               "--session-id", sid, audit_prompt(r, data, t)]
     else:
         role = role_of(t)
         cwd = prepare_worktree(r, data, t) if role == "builder" else r.project
@@ -739,7 +813,7 @@ def start_job(r, kind, tid):
         cmd = [cfg["claude"], "-p"] + add_dirs(r, cwd) + ["--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
                "--settings", r.brain / "settings.json", "--output-format", "json", "-n", "%s:%s" % (r.name, tid),
                "--append-system-prompt", role_prompt(role)]
-        if role == "builder":
+        if role != "shooter":
             cmd += ["--agents", r.brain / "agents.json"]
         cmd += (["--resume", sid] if resume else ["--session-id", sid]) + [prompt]
     out_path = logs / ("%s-%d.json" % (tid, n))
@@ -1248,8 +1322,15 @@ def print_status_text(r, data):
             print("FOLLOW-UP %s: %s" % (f.get("run") or f["name"], followup_line(data, f)))
     if (data.get("design") or {}).get("choice"):
         print("DESIGN LANGUAGE: %s" % design_line(data))
-    # Once finished, the pull request and the outside files are in the list above.
-    if data.get("pr_url") and data["status"] != "finished":
+    # Once finished, the pull request and the outside files are in the list above. A family's lines also show each
+    # run's status, so they stay.
+    prs = pull_requests(r, data)
+    if len(prs) > 1 and any(p["url"] for p in prs):
+        print("PULL REQUESTS:")
+        for p in prs:
+            print("  %s · %s · %s · %s" % (p["repo_name"], p["run"], "merged" if p["merged"] else p["status"],
+                                           p["url"] or "no pull request yet"))
+    elif data.get("pr_url") and data["status"] != "finished":
         print("PULL REQUEST: %s" % data["pr_url"])
     external = sorted({f for t in data["tasks"] if t.get("status") == "done" for f in (t.get("external") or [])})
     if external and data["status"] != "finished":
@@ -1282,8 +1363,14 @@ def cmd_wait(a):
 
 def do_approve(r, note=""):
     with r.edit() as d:
-        for t in d["tasks"]:
-            if t["type"] == "plan" and t["status"] in ("waiting_on_you", "audit"):
+        plans = [t for t in d["tasks"] if t["type"] == "plan"]
+        if any(t["status"] == "audit" for t in plans):
+            raise Fail("the hallucination officer is still checking the plan")
+        asking = [t["id"] for t in plans if t["status"] == "waiting_on_you" and t.get("question_kind") != "officer"]
+        if asking:
+            raise Fail("the plan is not ready yet: %s waits for you first (`coord status --text` says what to do)" % asking[0])
+        for t in plans:
+            if t["status"] == "waiting_on_you":
                 t["status"], t["question"], t["question_kind"] = "done", "", ""
         if any(t["type"] == "plan" and t["status"] in OPEN for t in d["tasks"]):
             raise Fail("the plan is not ready yet")
@@ -1340,7 +1427,7 @@ def start_followups(r):
         for f in todo:
             f["status"] = "starting"
         words = owner_words(d)
-    env = {k: v for k, v in os.environ.items() if k not in ("COORD_PROJECT", "COORD_RUN_DIR", "COORD_TASK", "COORD_ROLE")}
+    env = other_repo_env()
     for f in todo:
         try:
             name, n = f["name"], 2
@@ -1348,7 +1435,8 @@ def start_followups(r):
                 name, n = "%s-%d" % (slug(f["name"], 37), n), n + 1
             req = r.dir / ("followup-%s.md" % name)
             req.write_text("%s\n\n[coordinator context: started by run '%s' in %s when the owner approved its plan. This "
-                           "run's part: %s. The rest is built there.]\n" % (words, r.name, r.project, f["note"].rstrip(".")))
+                           "run's part: %s. The rest is built there. This run's own plan still waits for the owner's approval.]\n"
+                           % (words, r.name, r.project, f["note"].rstrip(".")))
             p = subprocess.run([sys.executable, str(ROOT / "bin" / "coord"), "start", "--name", name, "--request-file",
                                 str(req), "--no-open"], cwd=f["repo"], env=env, text=True, capture_output=True,
                                stdin=subprocess.DEVNULL, timeout=300)
@@ -1357,6 +1445,11 @@ def start_followups(r):
                 raise Fail((p.stderr or p.stdout).strip()[-300:] or "coord start exited with %d" % p.returncode)
             f.update(status="started", run=m.group(1), url=m.group(2) if m.group(2).startswith("http") else "", error="")
             r.log("follow-up run %s started in %s" % (f["run"], f["repo"]))
+            try:
+                with Run(f["repo"], f["run"]).edit() as fd:
+                    fd["parent"] = {"repo": str(r.project), "run": r.name}
+            except Exception as e:  # the run did start; only the link back to this one is missing
+                r.log("could not record the parent of follow-up run %s: %s" % (f["run"], e))
         except Exception as e:
             f.update(status="failed", error=str(e).replace("coord: ", "", 1))
             r.log("follow-up run for %s failed to start: %s" % (f["repo"], f["error"]))
@@ -1649,7 +1742,136 @@ def cmd_terminate(a):
     print("\n".join(lines))
 
 
+def merge_pr(p):
+    """Merge one pull request as a single squashed commit: its title, no body. Returns the step's result."""
+    view = run(["gh", "pr", "view", p["url"], "--json", "state,isDraft,title"], cwd=p["repo"], check=False)
+    if view.returncode:
+        raise Fail((view.stderr or view.stdout).strip()[-300:] or "gh pr view failed")
+    pr = json.loads(view.stdout)
+    if pr.get("state") == "MERGED":
+        return "already merged"
+    if pr.get("state") == "CLOSED":
+        raise Fail("the pull request is closed")
+    if pr.get("isDraft"):
+        run(["gh", "pr", "ready", p["url"]], cwd=p["repo"])
+    run(["gh", "pr", "merge", p["url"], "--squash", "--subject", pr.get("title") or p["run"], "--body", ""], cwd=p["repo"])
+    return "merged"
+
+
+def cmd_merge(a):
+    r = pick_run(a.run)
+    try:
+        merge_all(r)
+    except Exception as e:
+        # Started from the live page, the record says "merging" before these checks run: leave the reason there
+        error = str(e).strip() or repr(e)
+        with r.edit() as d:
+            m = d.get("merge") or {}
+            if m.get("status") == "merging" and m.get("pid") == os.getpid():
+                m.update(status="failed", error=error)
+        raise e if isinstance(e, Fail) else Fail(error)
+
+
+def merge_all(r):
+    data = r.load()
+    if data.get("parent"):
+        top = first_run(data)
+        raise Fail("%s is a follow-up run; merge all from its first run: `coord merge %s` in %s" % (r.name, top["run"], top["repo"]))
+    prs = pull_requests(r, data)
+    waiting = [p for p in prs if p["status"] != "finished" or not p["url"]]
+    if waiting:
+        raise Fail("every run must be finished with a pull request first; not yet: %s" % ", ".join(
+            "%s in %s (%s)" % (p["run"], p["repo_name"], p["status"] if p["status"] != "finished" else "no pull request")
+            for p in waiting))
+    if not shutil.which("gh"):
+        raise Fail("gh is not on PATH")
+    with r.edit() as d:
+        m = d.get("merge") or {}
+        if m.get("status") == "merging" and m.get("pid") != os.getpid() and alive(m.get("pid")):
+            raise Fail("a merge is already running (pid %s)" % m["pid"])
+        d["merge"] = {"status": "merging", "pid": os.getpid(), "error": "", "steps": []}
+    lines = []
+    for p in prs:
+        try:
+            result = merge_pr(p)
+        except Exception as e:
+            error = str(e)
+            with r.edit() as d:
+                d["merge"]["steps"].append(dict(run=p["run"], repo_name=p["repo_name"], url=p["url"], result="failed: " + error))
+                d["merge"].update(status="failed", error=error)
+            print("\n".join(lines + ["failed · %s · %s · %s" % (p["repo_name"], p["run"], p["url"])]))
+            raise Fail("merging %s failed, nothing was ended; fix it and run `coord merge %s` again: %s" % (p["url"], r.name, error))
+        if not p["merged"]:
+            with Run(p["repo"], p["run"]).edit() as d:
+                d["pr_merged"] = now()
+        with r.edit() as d:
+            d["merge"]["steps"].append(dict(run=p["run"], repo_name=p["repo_name"], url=p["url"], result=result))
+        lines.append("%s · %s · %s · %s" % (result, p["repo_name"], p["run"], p["url"]))
+    with r.edit() as d:
+        d["merge"]["status"] = "done"
+    print("\n".join(lines))
+    # Deepest first, the first run last: ending it stops its live page, and its worktree may hold this very file
+    failed = []
+    for p in reversed(prs):
+        try:
+            res = subprocess.run([sys.executable, str(ROOT / "bin" / "coord"), "terminate", p["run"]], cwd=p["repo"],
+                                 env=other_repo_env(), text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=300)
+        except subprocess.TimeoutExpired:
+            failed.append(p["run"])
+            print("terminate %s in %s timed out" % (p["run"], p["repo_name"]))
+            continue
+        print((res.stdout or "").strip() or "terminate %s in %s printed nothing" % (p["run"], p["repo_name"]))
+        if res.returncode:
+            failed.append(p["run"])
+            print((res.stderr or "").strip(), file=sys.stderr)
+    if failed:
+        raise Fail("all pull requests are merged, but these runs did not end: %s; run `coord terminate <run>` in their repos"
+                   % ", ".join(failed))
+
+
+def start_merge(r):
+    """The live page's Approve: `coord merge` in its own session, so it outlives this page's server."""
+    with r.edit() as d:
+        ready, waiting_for = merge_ready(r, d)
+        if (d.get("merge") or {}).get("status") == "merging" and alive(d["merge"].get("pid")):
+            raise Fail("a merge is already running")
+        if not ready:
+            raise Fail("not ready to merge all" + (": waiting for %s" % ", ".join(waiting_for) if waiting_for else ""))
+        if not shutil.which("gh"):
+            raise Fail("gh is not on PATH")
+        (r.brain / "logs").mkdir(parents=True, exist_ok=True)
+        with open(r.brain / "logs" / "merge.out", "a") as log:
+            p = subprocess.Popen([sys.executable, str(ROOT / "bin" / "coord"), "merge", r.name], cwd=str(r.project),
+                                 env=other_repo_env(), stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                 start_new_session=True)
+        d["merge"] = {"status": "merging", "pid": p.pid, "error": "", "steps": []}
+
+
 # ---------------------------------------------------------------- agent commands
+
+def owner_only(a):
+    """True when an agent runs an owner's command on its own run or that run's family (its first run, every follow-up)."""
+    rd = os.environ.get("COORD_RUN_DIR")
+    if not os.environ.get("COORD_ROLE") or not rd or a.cmd in AGENT_CMDS or (a.cmd == "todo" and a.action != "done"):
+        return False
+    if a.cmd == "update":
+        return True
+    mine = Run(Path(rd).parent.parent, Path(rd).name)
+    try:
+        if a.cmd in ("start", "map"):
+            return Path(project_root()).resolve() == mine.project
+        target = pick_run(getattr(a, "run", None))
+        if target.dir == mine.dir:
+            return True
+        def top(x):
+            t = first_run(x.load())
+            return Run(t["repo"], t["run"]) if t else x
+        root = top(mine)
+        return top(target).dir == root.dir or \
+            (str(target.project), target.name) in {(p["repo"], p["run"]) for p in pull_requests(root, root.load())}
+    except Fail:
+        return False  # no such run: the command itself says so
+
 
 def agent_ctx():
     rd, tid = os.environ.get("COORD_RUN_DIR"), os.environ.get("COORD_TASK")
@@ -1814,7 +2036,14 @@ def cmd_hook(a):
     if not rd:
         return 0
     tool, ti = inp.get("tool_name", ""), inp.get("tool_input") or {}
-    if tool == "Bash" and re.match(r"\s*(\S*/)?coord\s", ti.get("command", "") + " "):
+    cmd = ti.get("command", "") if tool == "Bash" else ""
+    if re.search(r"/api/(approve|accept|answer|pause|resume|todo|merge)\b", cmd):
+        # The run's own live page takes the owner's clicks, not an agent's requests
+        port = Run(Path(rd).parent.parent, Path(rd).name).state().get("viewer_port")
+        if port and re.search(r"(127\.0\.0\.1|localhost|0\.0\.0\.0):%s\b" % port, cmd):
+            sys.stderr.write(OWNER_ONLY + "\n")
+            return 2
+    if tool == "Bash" and re.match(r"\s*(\S*/)?coord\s", cmd + " "):
         return 0
     data = read_json(Path(rd) / "tasks.json", {}) or {}
     if data.get("status") == "paused" or data.get("terminating"):
@@ -1822,6 +2051,9 @@ def cmd_hook(a):
         return 2
     tid, role = os.environ.get("COORD_TASK", ""), os.environ.get("COORD_ROLE", "")
     t = next((x for x in data.get("tasks", []) if x["id"] == tid), None)
+    if t and t.get("status") == "waiting_on_you":
+        sys.stderr.write("Your question waits for the owner's answer. End your turn now; you are resumed with the answer.\n")
+        return 2
     if t and t.get("inbox") and role in ("builder", "planner"):
         r = Run(Path(rd).parent.parent, Path(rd).name)
         with r.edit() as d:
@@ -1843,6 +2075,9 @@ def cmd_hook(a):
                 return 2
     if tool in ("Edit", "Write", "NotebookEdit", "MultiEdit") and path:
         real = os.path.realpath(os.path.expanduser(path))
+        if real == os.path.realpath(os.path.join(rd, "tasks.json")):
+            sys.stderr.write("Blocked: only `coord` writes tasks.json; change your own task with `coord task`.\n")
+            return 2
         inside = lambda x: real == os.path.realpath(x) or real.startswith(os.path.realpath(x) + os.sep)
         allowed = [rd] + ([str(Path(rd).parent)] if role in ("planner", "mapper") else []) + ([wt] if role == "builder" and wt else [])
         if role == "builder" and t:
@@ -2033,6 +2268,7 @@ def view_state(r):
     data["plan_audits"] = sorted(p.name for p in r.dir.glob("plan-audit-*.md"))
     data["scheduler_alive"] = alive(st.get("scheduler_pid"))
     data["agents"] = st.get("agents") or {}
+    data["prs"] = pull_requests(r, data)
     data["waiting"] = owner_actions(r, data, data["scheduler_alive"])
     data["summary"] = summary(data, data["scheduler_alive"])
     data["now"] = now()
@@ -2166,6 +2402,8 @@ def cmd_viewer(a):
                     do_resume(r)
                 elif act == "/api/todo":
                     do_todo_done(r, int(body["n"]))
+                elif act == "/api/merge":
+                    start_merge(r)
                 else:
                     return self.send(404, "{}")
                 self.send(200, json.dumps({"ok": True}))
@@ -2376,6 +2614,10 @@ def main(argv=None):
     p.add_argument("--purge", action="store_true", help="also delete its knowledge folder in the project")
     p.set_defaults(fn=cmd_terminate)
 
+    p = sub.add_parser("merge", help="merge every pull request of a run and its follow-up runs, then end them all")
+    p.add_argument("run", nargs="?")
+    p.set_defaults(fn=cmd_merge)
+
     p = sub.add_parser("task", help="(agents) update your own task")
     p.add_argument("action", choices=["show", "list", "start", "review", "done", "ask", "note", "add", "edit", "remove", "design",
                                        "followup", "todo"])
@@ -2421,6 +2663,8 @@ def main(argv=None):
         if not a.text and a.action != "followup":
             ap.error("say what: coord task %s \"...\"" % a.action)
     try:
+        if owner_only(a):
+            raise Fail(OWNER_ONLY)
         code = a.fn(a)
         return code or 0
     except Fail as e:

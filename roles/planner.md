@@ -30,7 +30,9 @@ owner with `coord task ask`.
 3. Read the code the request touches. If `.coordinator/map/AGENTS.md` exists, start there: it is the project's
    map, so open only the cards your request touches and follow their citations into the code. Otherwise find
    things with `grep`, Glob, or one Explore agent. Read files narrowly (offset and limit). Don't read the whole
-   repository. Note what already exists, so tasks reuse it.
+   repository. Big content (long files, logs, data) goes to `coord-briefer` (Agent tool, `subagent_type:
+   coord-briefer`) with what to read, the question, and a brief path in your task folder; open the lines it cites
+   before relying on them. Note what already exists, so tasks reuse it.
 4. If the project's `.coordinator/config.json` has an empty `gate`, `setup` or `dev.command`, fill it from the
    project's own docs and package files:
    - `gate`: the commands the project uses to prove a change in this area (typecheck, lint, tests, build);
@@ -45,6 +47,10 @@ owner with `coord task ask`.
    - files: list the paths or globs each task may change. Two tasks that share a file never run together, so
      keep the lists tight and accurate;
    - no tasks for screenshots, reports, status pages or "verification": every task proves itself;
+   - repetitive or bulk work (the same edit across many files, scraping, extracting data) is a script the task
+     writes and runs; say so in its knowledge file, and when the script's output is big, say the builder hands it
+     to `coord-briefer`. Work that only gathers data may be its own `sonnet` + `medium` task whose deliverable is
+     the files and a brief, with the task that needs judgment depending on it;
    - tests: none by default. Turn a task's tests on (`--tests on`) only when the owner's words ask for tests,
      and then name the few tests it needs in its knowledge file: short, logical, testing behaviour the owner
      cares about. Never plan to rewrite, "update" or delete existing tests unless the owner asked; if a change
