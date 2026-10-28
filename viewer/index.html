@@ -111,6 +111,22 @@ header.top{position:sticky;top:0;z-index:5;background:var(--co-bg);
 .btn svg{flex:none;transition:transform var(--co-dur-quick) var(--co-ease-arrive)}
 .btn.pr:hover svg{transform:translate(2px,-2px)}
 .btn.icon{width:34px;padding:0}
+/* Full auto: while it's on, /coordinate decides for the owner, merges and ends the run */
+.auto{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 12px 0 9px;border:1px solid var(--co-line-strong);
+  border-radius:var(--co-radius-pill);background:var(--co-surface);color:var(--co-ink-2);font:600 var(--co-text-sm)/1 var(--co-font-sans);
+  white-space:nowrap;cursor:pointer;
+  transition:background-color var(--co-dur-quick) var(--co-ease-arrive),border-color var(--co-dur-quick) var(--co-ease-arrive),
+    color var(--co-dur-quick) var(--co-ease-arrive)}
+.auto:hover{border-color:var(--co-muted)}
+.auto:disabled{cursor:progress}
+.auto-track{position:relative;flex:none;width:28px;height:16px;border-radius:var(--co-radius-pill);background:var(--co-sunken);
+  box-shadow:inset 0 0 0 1px var(--co-line-strong);transition:background-color var(--co-dur-quick) var(--co-ease-arrive),box-shadow var(--co-dur-quick) var(--co-ease-arrive)}
+.auto-knob{position:absolute;top:3px;left:3px;width:10px;height:10px;border-radius:50%;background:var(--co-muted);
+  transition:transform var(--co-dur-base) var(--co-ease-arrive),background-color var(--co-dur-quick) var(--co-ease-arrive)}
+.auto[aria-checked="true"]{background:var(--co-accent-soft);border-color:transparent;color:var(--co-accent-strong)}
+.auto[aria-checked="true"]:hover{border-color:var(--co-accent)}
+.auto[aria-checked="true"] .auto-track{background:var(--co-accent);box-shadow:none}
+.auto[aria-checked="true"] .auto-knob{transform:translateX(12px);background:var(--co-on-accent)}
 /* Pull requests: the run's, then its follow-up runs', in merge order. More than one opens a small menu. */
 .pr-wrap{position:relative;display:inline-flex}
 .pr-n{font-variant-numeric:tabular-nums}
@@ -152,6 +168,7 @@ main{max-width:1500px;margin:0 auto;padding:22px 24px 72px}
 .w-in{padding-bottom:28px}
 .w-title{display:flex;align-items:center;gap:8px;margin:0 0 12px;font-size:var(--co-text-base);font-weight:var(--co-weight-strong);letter-spacing:-0.01em}
 .w-title:focus{outline:none}
+.w-auto{margin:-4px 0 12px;color:var(--co-muted);font-size:var(--co-text-xs)}
 .attention{display:grid;gap:12px}
 .w-kind{display:inline-block;margin:0 0 8px;padding:1px 7px;border-radius:var(--co-radius-sm);background:var(--co-warn-soft);color:var(--co-warn);
   font-size:0.75rem;font-weight:600;line-height:1.5}
@@ -393,6 +410,7 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
   .rule{display:none}
   .actions{flex-basis:100%;gap:6px}
   .btn{height:32px;padding:0 11px}
+  .auto{height:32px;padding:0 11px 0 8px}
   .pr-wrap{position:static}
   .pr-menu{left:16px;right:16px;top:calc(100% + 4px);width:auto;min-width:0;max-width:none}
   main{padding:18px 16px 56px}
@@ -412,6 +430,7 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
   .task:hover,.btn:active{transform:none}
   .btn.pr:hover svg{transform:none}
   #prs .chev{transition:none}
+  .auto-knob{transition:none}
   .tabs.ready::after{transition:none}
   .c-res details>summary::after,.c-prompt>summary::before{transition:none}
   aside{transform:none;opacity:0;transition:opacity var(--co-dur-quick) linear,visibility 0s linear var(--co-dur-quick)}
@@ -446,6 +465,8 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
           <svg class="chev" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <div class="card pr-menu" id="prs-menu" hidden><ul id="prs-list" aria-label="Pull requests"></ul></div>
       </div>
+      <button class="auto" id="auto" role="switch" aria-checked="false" hidden
+        title="Full auto: you're away. /coordinate decides everything that waits on you, merges when the run is done and ends it. Needs the /coordinate session open."><span class="auto-track" aria-hidden="true"><span class="auto-knob"></span></span>Full auto</button>
       <button class="btn" id="pause" hidden>Pause</button>
       <button class="btn" id="resume" hidden>Resume</button>
     </div>
@@ -457,6 +478,7 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
   <section class="waiting" id="waiting" aria-labelledby="w-title" hidden>
     <div class="w-in">
       <h2 class="w-title" id="w-title" tabindex="-1">Waiting on you <span class="count" id="w-count">0</span></h2>
+      <p class="w-auto" id="w-auto" hidden>Full auto is on: /coordinate decides these for you.</p>
       <div class="attention" id="attention"></div>
     </div>
   </section>
@@ -828,6 +850,8 @@ function render(s){
   const end = ["finished","planned"].includes(s.status) ? s.updated : null;
   const wall = ((end?Date.parse(end):Date.now()) - Date.parse(s.created))/60000;
   setHTML($("#stats"), `<div><b>${done}/${work.length}</b>tasks</div><div><b>${fmtMin(wall)}</b>elapsed</div><div><b>${fmtMin(mins)}</b>agent time</div><div><b>${fmtTok(tok)}</b>tokens</div><div><b>${Object.keys(s.agents||{}).length}</b>agents live</div>`);
+  const au = $("#auto"); au.hidden = s.mode==="map"; au.setAttribute("aria-checked", s.full_auto ? "true" : "false");
+  $("#w-auto").hidden = !s.full_auto;
   $("#pause").hidden = !["running","planning","waiting_on_you"].includes(s.status);
   $("#resume").hidden = !(s.status==="paused" || (!s.scheduler_alive && ["running","planning"].includes(s.status)));
 
@@ -1050,8 +1074,9 @@ document.addEventListener("click", async (e)=>{
   const menu = $("#prs").getAttribute("aria-expanded")==="true", focus = document.activeElement;
   if(menu && !e.target.closest("#prs-wrap")) prMenu(false, !focus || focus===document.body);
   if(e.target.closest("#prs")) return prMenu(!menu);
-  const b = e.target.closest("[data-path],[data-view],#v-close,#v-back,#w-jump,[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],[data-settle],[data-unsettle],#d-close,#pause,#resume");
+  const b = e.target.closest("[data-path],[data-view],#v-close,#v-back,#w-jump,[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],[data-settle],[data-unsettle],#d-close,#pause,#resume,#auto");
   if(!b) return;
+  if(b.id==="auto"){ b.disabled = true; try{ await api("/api/auto",{on:b.getAttribute("aria-checked")!=="true"}); } finally { b.disabled = false; } return; }
   if(b.id==="v-close" || b.id==="v-back") return closeViewer();
   if(b.dataset.path) return openViewer(b.dataset.path);
   if(b.dataset.view) return openViewer(b.dataset.view, true);
