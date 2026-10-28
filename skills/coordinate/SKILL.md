@@ -23,7 +23,7 @@ lines:
 | Input | Run |
 |---|---|
 | `status` | `coord status` (opens the live page and prints one line) |
-| `approve` | `coord approve`, then re-arm the wait (below) |
+| `approve` | `coord approve`, then relay and re-arm (below, "After approval") |
 | `answer <task> <text>` | `coord answer <task> "<text>"`, then re-arm the wait |
 | `tell <task> <text>` | `coord tell <task> "<text>"` (reaches a running agent at its next step) |
 | `add <text>` | `coord add "<text>"` (the planner updates the plan; it returns through the officer to the owner), then re-arm the wait |
@@ -33,7 +33,8 @@ lines:
 | `terminate [--purge]` | `coord terminate [--purge]`, then relay its summary |
 | `update` | `coord update`, then relay its line (a new session loads a new version) |
 
-Add `--run <name>` when the project has more than one coordinator and the owner named one.
+Name the run when the project has more than one coordinator and the owner named one: `coord <command> <name>`
+for `status`, `wait`, `approve`, `pause`, `resume`, `run` and `terminate`, and `--run <name>` for the rest.
 
 `plan <goal>` starts a plan-only run (goals, milestones, tasks for later runs). Anything else starts a new run.
 
@@ -52,9 +53,11 @@ Add `--run <name>` when the project has more than one coordinator and the owner 
 Run `coord wait` with `run_in_background: true`. It costs nothing while it waits and returns when the run needs
 the owner or ends. When it returns, act on what it printed:
 
-- **PLAN READY:** in at most 8 lines, give the goal, the number of tasks and which run in parallel, and each
-  question with its default. Point to the live page for the full plan. Ask the owner to approve, or to say what
-  to change. On approval run `coord approve`; on changes run `coord add "<their words>"`. Re-arm the wait.
+- **PLAN READY:** in at most 8 lines, give the goal, the number of tasks and which run in parallel, each
+  question with its default, and each ask that is not in this run with where it goes (under FOLLOW-UP RUNS: a
+  run that starts in that repo when the owner approves a build run). Point to the live page for the full plan.
+  Ask the owner to approve, or to say what to change. On approval run `coord approve` (below); on changes run
+  `coord add "<their words>"` and re-arm the wait.
 - **QUESTION <task>:** relay it in one line with its default. On the answer, run `coord answer <task> "<their
   words>"`. For an officer stalemate the owner may instead say to accept it: `coord accept <task>`. Re-arm the
   wait.
@@ -62,6 +65,14 @@ the owner or ends. When it returns, act on what it printed:
   whether to `terminate`.
 - **paused / planned:** say so in one line.
 - **The scheduler stopped:** say so, and offer `coord resume`.
+
+### After approval
+
+`coord approve` prints a line per follow-up run it started in another repo. Relay each in one line: the repo and
+its live page. Re-arm the wait for this run, and one for each follow-up, both in the background:
+`cd "<repo>" && coord wait <name>`. Run every command for a follow-up run (approve, answer, tell ...) from its repo
+and name the run, as above. When the owner approved on the live page instead, the wait's next return prints them as
+`FOLLOW-UP <name>: <repo> · <live page>` lines; relay and wait on any you haven't yet.
 
 ## Rules
 

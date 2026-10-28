@@ -1185,7 +1185,7 @@ def print_status_text(r, data):
             keep, out = False, []
             for line in plan.read_text().splitlines():
                 if line.startswith("## "):
-                    keep = line[3:].strip().lower() in ("goal", "questions for the owner", "out of scope")
+                    keep = line[3:].strip().lower() in ("goal", "questions for the owner", "out of scope", "not in this run")
                 if keep:
                     out.append(line)
             print("\n".join(out[:60]))
@@ -1195,6 +1195,13 @@ def print_status_text(r, data):
                 print("  %s %s [%s, %s/%s%s] after: %s" % (t["id"], t["title"], t["size"], t.get("model") or "default",
                                                          t.get("effort") or "default", ", tests on" if t.get("tests") else "",
                                                          ", ".join(t["depends_on"]) or "-"))
+        if data.get("followups"):
+            print("FOLLOW-UP RUNS:")
+            for f in data["followups"]:
+                print("  %s - %s" % (followup_line(data, f), f["note"]))
+    elif data.get("plan_approved"):
+        for f in data.get("followups") or []:
+            print("FOLLOW-UP %s: %s" % (f.get("run") or f["name"], followup_line(data, f)))
     if (data.get("design") or {}).get("choice"):
         print("DESIGN LANGUAGE: %s" % design_line(data))
     if data.get("pr_url"):
@@ -1236,6 +1243,69 @@ def do_approve(r):
         d["status"] = derive_status(d)
     r.poke()
     start_daemon(r, "scheduler")
+    return start_followups(r)
+
+
+def followup_repo(r, path):
+    p = Path(path).expanduser()
+    if not path or not p.is_absolute():
+        raise Fail("give the repo's absolute path: coord task followup --repo \"<absolute repo path>\" \"<note>\"")
+    out = run(["git", "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"], cwd=p,
+              check=False) if p.is_dir() else None
+    if not out or out.returncode or Path(out.stdout.split("\n")[0]).resolve() != p.resolve():
+        raise Fail("%s is not the top folder of a git repository" % p)
+    repo = Path(out.stdout.split("\n")[1]).parent.resolve()
+    if repo == r.project:
+        raise Fail("%s is this run's own repo; add a task instead" % repo)
+    return repo
+
+
+def followup_line(data, f):
+    if f.get("status") == "started":
+        return "%s · %s" % (f["repo"], f.get("url") or "live page: `coord status %s` in that repo" % f["run"])
+    if f.get("status") == "failed":
+        return "%s · failed to start: %s" % (f["repo"], f.get("error"))
+    if data.get("mode") != "build":
+        return "%s · not started (plan-only run)" % f["repo"]
+    return "%s · %s" % (f["repo"], "starting" if f.get("status") == "starting" else "starts when you approve")
+
+
+def start_followups(r):
+    """Start each pending follow-up run in its own repo with the owner's full words. Failures are recorded, never raised."""
+    with r.edit() as d:
+        if d.get("mode") != "build":
+            return []
+        todo = [f for f in d.get("followups") or [] if f.get("status") == "pending"]
+        for f in todo:
+            f["status"] = "starting"
+        words = owner_words(d)
+    env = {k: v for k, v in os.environ.items() if k not in ("COORD_PROJECT", "COORD_RUN_DIR", "COORD_TASK", "COORD_ROLE")}
+    for f in todo:
+        try:
+            name, n = f["name"], 2
+            while (Path(f["repo"]) / STORE / name / "tasks.json").exists():
+                name, n = "%s-%d" % (slug(f["name"], 37), n), n + 1
+            req = r.dir / ("followup-%s.md" % name)
+            req.write_text("%s\n\n[coordinator context: started by run '%s' in %s when the owner approved its plan. This "
+                           "run's part: %s. The rest is built there.]\n" % (words, r.name, r.project, f["note"].rstrip(".")))
+            p = subprocess.run([sys.executable, str(ROOT / "bin" / "coord"), "start", "--name", name, "--request-file",
+                                str(req), "--no-open"], cwd=f["repo"], env=env, text=True, capture_output=True,
+                               stdin=subprocess.DEVNULL, timeout=300)
+            m = re.search(r"^started (\S+) - planning\. Live page: (\S+)", p.stdout, re.M)
+            if p.returncode or not m:
+                raise Fail((p.stderr or p.stdout).strip()[-300:] or "coord start exited with %d" % p.returncode)
+            f.update(status="started", run=m.group(1), url=m.group(2) if m.group(2).startswith("http") else "", error="")
+            r.log("follow-up run %s started in %s" % (f["run"], f["repo"]))
+        except Exception as e:
+            f.update(status="failed", error=str(e).replace("coord: ", "", 1))
+            r.log("follow-up run for %s failed to start: %s" % (f["repo"], f["error"]))
+    if todo:
+        result = {f["repo"]: f for f in todo}
+        with r.edit() as d:
+            for f in d.get("followups") or []:
+                if f["repo"] in result and f.get("status") == "starting":
+                    f.update(result[f["repo"]])
+    return todo
 
 
 def do_answer(r, tid, text):
@@ -1285,8 +1355,10 @@ def do_resume(r):
 def cmd_simple(a):
     r = pick_run(a.run)
     if a.cmd == "approve":
-        do_approve(r)
+        started = do_approve(r)
         print("approved - building starts now" if r.load()["mode"] == "build" else "approved - the plan is saved; `coord run %s` builds it later" % r.name)
+        for f in started:
+            print("follow-up run %s: %s" % (f.get("run") or f["name"], followup_line({}, f)))
     elif a.cmd == "accept":
         do_accept(r, a.task)
         print("accepted %s" % a.task)
@@ -1306,6 +1378,8 @@ def cmd_simple(a):
         start_daemon(r, "scheduler")
         start_daemon(r, "viewer")
         print("building %s · %s" % (r.name, viewer_url(r)))
+        for f in start_followups(r) if r.load().get("plan_approved") else []:
+            print("follow-up run %s: %s" % (f.get("run") or f["name"], followup_line({}, f)))
     elif a.cmd == "retry":
         with r.edit() as d:
             t = find(d, a.task)
@@ -1513,13 +1587,36 @@ def cmd_task(a):
                 ",".join(t["files"]) or "-", t.get("model") or "default", t.get("effort") or "default", t["size"],
                 "on" if t.get("tests") else "off", "on" if t.get("ui") else "off")
                   + (" | external: %s" % ",".join(t["external"]) if t.get("external") else ""))
-        print("design language: %s" % design_line(r.load()))
+        data = r.load()
+        print("design language: %s" % design_line(data))
+        for f in data.get("followups") or []:
+            print("follow-up %s: %s | %s" % (f.get("run") or f["name"], followup_line(data, f), f["note"]))
         return
-    if act in ("add", "edit", "remove", "design") and role != "planner":
-        raise Fail("only the planner adds, edits or removes tasks and records the design language")
+    if act in ("add", "edit", "remove", "design", "followup") and role != "planner":
+        raise Fail("only the planner adds, edits or removes tasks and records the design language and follow-up runs")
     msg = ""
+    repo = followup_repo(r, a.repo or "") if act == "followup" else None
     with r.edit() as d:
-        if act == "add":
+        if act == "followup":
+            note, fus = " ".join(a.text).strip(), d.setdefault("followups", [])
+            i = next((i for i, f in enumerate(fus) if f["repo"] == str(repo)), None)
+            if i is not None and (fus[i].get("status") == "started" or fus[i].get("run")):
+                raise Fail("the follow-up run for %s has started (%s); put any change for it under \"Not in this run\""
+                           % (repo, fus[i].get("run") or fus[i]["name"]))
+            if not note:
+                if i is not None:
+                    del fus[i]
+                msg = "removed the follow-up for %s" % repo if i is not None else "no follow-up recorded for %s" % repo
+            else:
+                f = {"repo": str(repo), "note": note, "name": slug("%s-%s" % (d["name"], slug(repo.name))),
+                     "status": "pending", "run": "", "url": "", "error": ""}
+                if i is None:
+                    fus.append(f)
+                else:
+                    fus[i] = f
+                msg = "follow-up run %s recorded for %s; %s" % (f["name"], repo, "coord starts it when the owner approves"
+                                                               if d.get("mode") == "build" else "a plan-only run doesn't start it")
+        elif act == "add":
             known = {t["id"] for t in d["tasks"]}
             deps = [x.strip() for x in (a.deps or "").split(",") if x.strip()]
             missing = [x for x in deps if x not in known]
@@ -2090,7 +2187,8 @@ def main(argv=None):
     p.set_defaults(fn=cmd_terminate)
 
     p = sub.add_parser("task", help="(agents) update your own task")
-    p.add_argument("action", choices=["show", "list", "start", "review", "done", "ask", "note", "add", "edit", "remove", "design"])
+    p.add_argument("action", choices=["show", "list", "start", "review", "done", "ask", "note", "add", "edit", "remove", "design",
+                                       "followup"])
     p.add_argument("target", nargs="?")
     p.add_argument("text", nargs="*")
     p.add_argument("--id")
@@ -2104,6 +2202,7 @@ def main(argv=None):
     p.add_argument("--ui", choices=["on", "off"], help="on when the task designs or changes what people see")
     p.add_argument("--source", help="for `design`: the guides' paths, or the owner's words")
     p.add_argument("--external", help="files outside the repo the project's rules require this task to update (absolute paths)")
+    p.add_argument("--repo", help="for `followup`: the other repo's absolute path; coord starts a run there on approval")
     p.set_defaults(fn=cmd_task)
 
     p = sub.add_parser("audit", help="(officer) record a verdict")
@@ -2124,10 +2223,12 @@ def main(argv=None):
         p.add_argument("--run", required=True)
         p.set_defaults(fn=fn)
 
-    a = ap.parse_args(argv)
-    if a.cmd == "task" and a.action in ("ask", "note"):
-        a.text = ([a.target] if a.target else []) + a.text
-        if not a.text:
+    a, extra = ap.parse_known_args(argv)
+    if extra and not (a.cmd == "task" and a.action == "followup"):
+        ap.error("unrecognized arguments: %s" % " ".join(extra))
+    if a.cmd == "task" and a.action in ("ask", "note", "followup"):
+        a.text = ([a.target] if a.target else []) + a.text + extra
+        if not a.text and a.action != "followup":
             ap.error("say what: coord task %s \"...\"" % a.action)
     try:
         code = a.fn(a)
