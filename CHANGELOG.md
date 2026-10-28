@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0 - 2026-10-28
+
+- New brand: logo, banner and a redesigned live page with smooth, calm motion and light and dark themes.
+- The live page shows each agent's conversation as it works, and opens any file or image in a viewer.
+- The plan card shows the plan's short version, with an answer per question; approve or send changes from the page.
+- The draft pull request opens when work starts, with a status body that is updated as tasks change.
+- Asks that belong to another repo become follow-up runs, started there when the plan is approved.
+- Everything waiting on you is in one list, on the live page and in chat. Agents record manual steps; `coord todo`
+  lists them.
+- Commits to `main` trigger the website's deploy (`.github/workflows/website.yml`).
+- Screenshots are saved in the shots task's folder, and no artifact leaves the machine.
+- The planner gives each agent the path of every file it needs.
+
 ## 0.4.2 - 2026-10-28
 
 - `.coordinator/` reaches `.gitignore` through the run: one commit on the run branch, merged with its pull request.

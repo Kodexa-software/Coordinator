@@ -1,27 +1,55 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="Coordinator - conduct a team of Claude Code agents from one request" width="100%">
-</p>
-
-<p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.4.2-c9a45c?style=flat-square">
-  <img alt="license" src="https://img.shields.io/badge/license-MIT-1d2033?style=flat-square">
-  <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-1d2033?style=flat-square">
-  <img alt="scheduling" src="https://img.shields.io/badge/scheduling-zero%20tokens-c9a45c?style=flat-square">
+  <img src="assets/banner.svg" alt="Coordinator: conduct a team of Claude Code agents from one request." width="100%">
 </p>
 
 <p align="center"><em>One request in. A planned, audited, reviewed branch out.</em></p>
 
 <p align="center"><a href="https://coordinator.kodexa.workers.dev"><strong>coordinator.kodexa.workers.dev</strong></a></p>
 
+<p align="center">
+  <img alt="version" src="https://img.shields.io/badge/version-0.5.0-6a44da?style=flat-square">
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-151520?style=flat-square">
+  <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-151520?style=flat-square">
+  <img alt="scheduling" src="https://img.shields.io/badge/scheduling-zero%20tokens-6a44da?style=flat-square">
+</p>
+
 ---
 
-Coordinator turns a single `/coordinate` request into a small team of Claude Code agents that work in the
-background while you do something else. A planner splits the work, a **hallucination officer** checks the plan
-against your exact words, you approve it once, and builders work through it **in parallel**. Each builder works
-in its own git worktree, and each task is reviewed and checked again before it is merged.
+Coordinator turns one `/coordinate` request into a small team of Claude Code agents working in the background. A
+planner splits the work, a **hallucination officer** checks the plan against your exact words, you approve it once,
+and builders work **in parallel**, each in its own git worktree, reviewed and checked again before it is merged.
 
-The conductor never plays an instrument. Scheduling, merging, the gate and the live page are plain code and
-cost no tokens. The agents spend tokens only on planning, building and checking.
+The conductor never plays an instrument: scheduling, merging, the gate and the live page are plain code and cost no
+tokens. This repo is the skill; the [website](https://coordinator.kodexa.workers.dev/docs/) has the docs.
+
+## Install
+
+```sh
+git clone https://github.com/Kodexa-software/Coordinator.git ~/.coordinator/app && ~/.coordinator/app/install.sh
+```
+
+Then start a new Claude Code session and type `/coordinate`. Needs a recent Claude Code CLI, Python 3.9+ and git;
+`gh` for the pull request, Node.js for screenshots. As a plugin, or more detail:
+[Install](https://coordinator.kodexa.workers.dev/docs/install/).
+
+## Update
+
+```text
+/coordinate update
+```
+
+Or `coord update` in a terminal, then start a new session. Plugin install:
+[Update](https://coordinator.kodexa.workers.dev/docs/update/).
+
+## Remove
+
+```sh
+rm ~/.local/bin/coord ~/.claude/skills/coordinate
+rm -rf ~/.coordinator
+```
+
+End any active run first with `/coordinate terminate`. Plugin install:
+[Uninstall](https://coordinator.kodexa.workers.dev/docs/uninstall/).
 
 ## How a run flows
 
@@ -38,183 +66,62 @@ flowchart LR
     Q -- approve --> M[(Run branch<br/>+ gate)]
 ```
 
-1. **Plan.** A strong planner reads the code your request touches, not the whole repo, and writes `plan.md` plus
-   one brief per task. Each task gets its dependencies, the files it may change, its size, and the model and
-   effort it needs.
-2. **Audit.** The hallucination officer compares the plan with everything you have said. It looks for invented
-   requirements, enterprise-sized answers to simple asks, missed requirements, padded tasks, needlessly serial
-   steps and the wrong model for the job. It sends the plan back until it holds up; after three rounds, it asks
-   you.
-3. **Approve.** You read the plan on the live page or in chat and approve it, or say what to change. This is the
-   one stop in the run.
-4. **Build in parallel.** Tasks that don't depend on each other and don't share files run at the same time, each
-   in its own worktree. Each builder runs its own reviewer and fixes what it finds.
-5. **Audit and merge.** The officer checks each finished task against the plan and your words, without reading
-   the code. The scheduler then commits, merges into the run branch, runs your gate and pushes. A conflict or a
-   failing gate becomes a small fix task of its own. A draft pull request shows your full request, the plan and
-   every task, and is updated after each merge, so you can watch the changes land on GitHub.
+- **Plan.** The planner reads only the code your request touches and gives each task every file path it needs.
+- **Audit.** The officer sends the plan back until it matches your words: nothing invented, nothing missed.
+- **Approve.** Your one stop. Asks that belong to another repo start follow-up runs there, so none is dropped.
+- **Build.** Independent tasks run at once, each with its own reviewer. The draft pull request opens as work
+  starts and tracks every task.
+- **Merge.** The officer checks each task, then the scheduler commits, merges, runs your gate and pushes. Nothing
+  reaches your base branch for you.
 
-## Install
+Nothing leaves your machine: screenshots and other artifacts stay in the task's folder.
+[How it works](https://coordinator.kodexa.workers.dev/docs/how-it-works/) ·
+[Philosophy](https://coordinator.kodexa.workers.dev/docs/philosophy/).
 
-```sh
-git clone https://github.com/Kodexa-software/Coordinator.git ~/.coordinator/app && ~/.coordinator/app/install.sh
-```
+## The live page
 
-This links `/coordinate` into `~/.claude/skills` and `coord` into `~/.local/bin`. Start a new Claude Code session and
-type `/coordinate`. To update later, run `/coordinate update` (or `coord update` in a terminal), then start a new
-session.
+<p align="center"><img src="assets/live-page.png" alt="The live page: tasks moving from queued to working to done" width="88%"></p>
 
-**As a Claude Code plugin** instead: `/plugin marketplace add Kodexa-software/Coordinator`, then
-`/plugin install coordinator@coordinator`. Claude Code lists plugin commands with the plugin's name, so it shows as
-`/coordinator:coordinate` (typing `/coordinate` also works). Update it with
-`claude plugin marketplace update coordinator && claude plugin update coordinator@coordinator`.
+A local page on `127.0.0.1` shows the tasks moving from queued to done. Read each agent's conversation live, open
+any file or image, approve the plan with an answer per question, and see everything waiting on you in one list.
 
-**Needs:** a recent Claude Code CLI (`claude`), Python 3.9+, and git. The live pull request uses the GitHub CLI
-(`gh`). Before/after screenshots also need Node.js; Playwright is fetched on first use.
-
-## Use
-
-In Claude Code:
-
-```text
-/coordinate Add CSV export to the orders table, with the same columns the table shows.
-```
-
-The live page opens, the planner gets to work, and Coordinator tells you when the plan is ready. After that, a
-few words are enough:
+## Commands
 
 | You say | What happens |
 |---|---|
 | `/coordinate <request>` | Start a run |
-| `/coordinate plan <goal>` | Plan only: goals, milestones and tasks, saved in the project for a later run |
-| `/coordinate status` | Open the live page; one line in chat |
-| `/coordinate approve` | Approve the plan; building starts |
+| `/coordinate plan <goal>` | Plan only, saved in the project for a later run |
+| `/coordinate status` | Open the live page; what's waiting on you in chat |
+| `/coordinate approve` | Approve the plan (or on the live page, per question); building starts |
 | `/coordinate answer T3 <text>` | Answer an agent's question |
-| `/coordinate tell T3 <text>` | Send a note to a running agent; it arrives at its next step |
+| `/coordinate tell T3 <text>` | Send a note to a running agent |
 | `/coordinate add <text>` | Change the plan or add work; it goes back through the officer and you |
 | `/coordinate pause` / `resume` | Agents write an exact next step and stop / pick up where they stopped |
 | `/coordinate run` | Build a plan-only run, today or weeks later |
-| `/coordinate shots [note]` | Before/after screenshots (base branch vs run branch) as one PNG on your Desktop |
-| `/coordinate map [areas]` | Build or refresh the project map in `.coordinator/map/`, which planners read before the code |
-| `/coordinate accept T3` / `retry T3` / `stop T3` | Settle a task the officer keeps sending back / start it fresh / skip it |
-| `/coordinate update` | Update Coordinator to the latest version |
-| `/coordinate terminate` | End the run: stop every process, remove worktrees and internal files, keep the branch and the knowledge |
+| `/coordinate shots [note]` | Before/after screenshots as one PNG, saved in the shots task's folder |
+| `/coordinate todo` / `todo done <n>` | Manual steps only you can do / mark one done |
+| `/coordinate accept T3` / `retry T3` / `stop T3` | Settle a task / start it fresh / skip it |
+| `/coordinate update` | Update Coordinator |
+| `/coordinate terminate` | End the run; keep the branch and the knowledge |
+| `coord map [areas]` | Build or refresh the project map that planners read first |
 
 With the clone install, every command also works in a terminal as `coord <command>`, with no model involved.
+[All commands](https://coordinator.kodexa.workers.dev/docs/commands/).
 
-## The live page
+## Docs
 
-<p align="center"><img src="assets/live-page.png" alt="The live page: a plan with its steps, goal, approach and tasks" width="88%"></p>
+- [Configuration](https://coordinator.kodexa.workers.dev/docs/configuration/): settings, and where every file lives.
+- [How it works](https://coordinator.kodexa.workers.dev/docs/how-it-works/): roles, the live page, design languages,
+  the project map.
+- [Philosophy](https://coordinator.kodexa.workers.dev/docs/philosophy/): guard rails, tests off unless you ask,
+  your project's rules first.
 
-A small local page shows the tasks moving from queued to working, through the officer's check, to done. It also
-has the plan, the officer's reports, and each task's brief, changes and review. You approve plans and answer
-questions there too. It runs on `127.0.0.1` only, reads the run's files, and costs nothing to keep open.
+The earlier 0.1, measured on two real runs, spent 212M and 371M+ tokens across 40 and 64 agents. 0.2 was rebuilt
+for fewer, stronger agents in parallel, with an officer instead of cleanup. Next: measured numbers for today's
+version, and more on the live page.
 
-## Where things live
-
-| What | Where | After `terminate` |
-|---|---|---|
-| Project settings | `<project>/.coordinator/config.json` | kept |
-| The run's knowledge: `plan.md`, `tasks.json`, and per task `knowledge.md`, `changes.md`, `review.md`, officer reports | `<project>/.coordinator/<run>/` | kept, so a later run can continue |
-| Processes, logs, worktrees | `~/.coordinator/runs/<run>/` | removed |
-| Run branch | `coord/<run>`, pushed after every merged task, with a draft PR | kept |
-| Task branches | `coord-tasks/<run>/<task>` | removed |
-
-`.coordinator/` is added to the local `.git/info/exclude`, so it is never committed by accident. Each run also adds it
-to `.gitignore` in one commit on the run branch, so it reaches your branch through the run's pull request and your own
-checkout is never left with an uncommitted edit. Set `"gitignore": false` to keep your `.gitignore` untouched.
-
-## Configuration
-
-`<project>/.coordinator/config.json`. The planner fills in `gate`, `setup` and `dev` on the first run if you
-haven't.
-
-| Key | Default | Meaning |
-|---|---|---|
-| `gate` | `""` | Commands that prove a change (typecheck, lint, tests, build). Run by builders, and again after each merge |
-| `gate_cwd` | `"."` | Where the gate runs, relative to the repository root |
-| `setup` | `""` | What a fresh worktree needs first, for example linking dependencies from `$COORD_MAIN` |
-| `dev` | `{"command": "", "cwd": ".", "ready_path": "/"}` | Dev server for screenshots; `{port}` is replaced with a free port |
-| `max_parallel` | `3` | Builders at once |
-| `models` / `efforts` | Opus, high | Per role: `planner`, `builder`, `reviewer`, `officer`, `shooter`. The planner can set them per task |
-| `officer` | `{"plan": true, "tasks": true, "max_rounds": 3}` | Where the officer checks, and how many rounds before it asks you |
-| `permission_mode` | `"auto"` | Permission mode for background agents |
-| `deny` | push, commit, rebase, `reset --hard`, `gh pr`, publish, `sudo`, ... | Commands agents may never run |
-| `test_names` / `test_dirs` | common test file and folder patterns | What counts as a test file for the tests guard |
-| `gitignore` | `true` | Add `.coordinator/` to `.gitignore` on the run branch when it isn't there |
-| `push` / `pr` | `true` | Push the run branch after every merged task, and keep a draft PR with the request, the plan and the tasks up to date |
-| `base_branch` | the current branch | What the run branch starts from |
-
-## Design languages and the project map
-
-- **Design language, your choice.** When a request involves UI, the planner asks which design language to follow:
-  your project's own, Impeccable's (bundled), or another you name. The answer goes to every UI task, its
-  reviewer checks against it, and the officer checks the plan sticks to one.
-- **A map of your project.** `/coordinate map` builds a small, cited map of the code in `.coordinator/map/`, using
-  the System map method of Interpretable Context Methodology. Planners read it first instead of exploring the
-  repository on every run, and the officer checks it before it counts.
-
-Both are built in, with no other skills needed: Coordinator bundles the parts it uses, with credit and their
-licences, in [third_party/](third_party/README.md).
-
-## Guard rails
-
-- **Your project's rules come first.** Every agent loads the instruction files your own Claude Code session would:
-  the project's `CLAUDE.md` and `AGENTS.md`, those of every folder above it, and `.claude/rules`. It reads the
-  current versions, uncommitted edits included, and the guides they require. Where a project rule and an agent's
-  role disagree, the project wins, and the reviewer and the officer check it. Conflicts with how Coordinator works
-  are put to you as questions. Knowledge files your rules keep outside the repo (plans, status, decisions) are
-  planned as tasks and updated in place.
-- **Your words are the spec.** The request, every later addition and every answer are kept word for word. The
-  planner and the officer judge against all of them.
-- **No tests unless you ask.** A task's tests are off by default, and a hook blocks builders from touching test
-  files while they are. When you do ask, the reviewer and the officer check the tests are few, short and
-  relevant.
-- **Agents stay in their lane.** A builder writes only inside its worktree and its task folder. The planner
-  writes only the run's files. Agents never commit, push or switch branches; the scheduler commits.
-- **Live on GitHub, never on your base branch.** After every merged task the run branch is pushed and its draft
-  pull request is updated. Nothing is merged into your base branch for you. Set `"push": false` to keep a run
-  local.
-
-## How it compares
-
-|  | **Coordinator 0.2** | Coordinator 0.1 (earlier, unpublished) | The `/loop` skill |
-|---|---|---|---|
-| What runs the show | A script, at no token cost. Agents are separate background sessions | An Opus coordinator session, with lead agents under it | One session re-running a prompt on a schedule |
-| Who writes the code | Opus by default; the planner picks per task and the officer checks the pick | Mostly Sonnet workers; Opus only managed | The session's own model |
-| Steps between your words and the code | One: a brief, checked by the officer | Three: coordinator, then lead, then worker | None |
-| Parallel work | Yes: a worktree per task, with a file-overlap check | No: one task at a time | No |
-| Guard against invented scope | The officer audits the plan and every task, until it is right | Reviewers compared diffs with briefs | None built in |
-| Your approval | Once, on an audited plan | Ad hoc | None built in |
-| Tests | Off unless you ask; enforced by a hook | Written by default | Whatever the prompt says |
-| Proof work | The gate per task and one review; screenshots on request | Before/after pairs, pixel diffs, perf traces and full gates at every step | None built in |
-| Status | A live local page, notifications, and a draft PR updated after every task | Status files and HTML reports written by agents | The chat |
-| Context per agent | Small: a fresh session per task | Grew to 250-460K tokens per worker | Grows with every iteration |
-| Pause, resume, plan-only, terminate | Yes, including resume weeks later from the project's files | Pause and resume through notes | Stop only |
-| Best for | Requests that split into several tasks | Retired | Watching something over time; short sequential lists |
-
-### What 0.1 cost, measured
-
-Two real component-upgrade runs on the earlier version, from their transcripts:
-
-|  | Run A | Run B | Similar work in one direct session |
-|---|---|---|---|
-| Tokens | 212M | 371M, and not finished | 87M (a smaller component) |
-| Agents | 40 | 64 | 0 |
-| Wall-clock | ~12 h | 23 h+ | ~4 h |
-
-Across the two runs, there were about 1,200 screenshot and pixel-diff commands and 266 full gate runs. One run
-needed a whole cleanup task, which cut its pull request from 10,406 changed lines to 3,328. Those numbers shaped
-0.2: fewer and stronger agents, parallel work, an officer in place of after-the-fact cleanup, and no proof work
-nobody asked for. Numbers for 0.2 will be added here once it has done real runs of the same size.
-
-## Roadmap
-
-- Measured comparisons on real runs
-- A website and fuller documentation
-- A dependency-graph view and a timeline on the live page
-- Desktop notifications beyond macOS
-- Starter configs for common stacks
+**Maintainers:** every commit to `main` triggers the website's deploy through `.github/workflows/website.yml`,
+which needs the `WEBSITE_DEPLOY_TOKEN` secret.
 
 ## Credits
 
@@ -224,9 +131,8 @@ and [icm-architect](https://github.com/RinDig/icm-architect) by Jake Van Clief (
 
 ## Support
 
-Coordinator is built and maintained by [Kodexa](https://github.com/Kodexa-software) and will keep evolving. Issues and
-ideas are welcome on [GitHub](https://github.com/Kodexa-software/Coordinator/issues). Changes are listed in
-[CHANGELOG.md](CHANGELOG.md).
+Coordinator is built and maintained by [Kodexa](https://github.com/Kodexa-software). Issues and ideas are welcome on
+[GitHub](https://github.com/Kodexa-software/Coordinator/issues). Changes are in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
