@@ -1,0 +1,27 @@
+# Asks the website repo to rebuild and deploy whenever Coordinator's main gets a commit.
+# WEBSITE_DEPLOY_TOKEN: fine-grained token with "Actions: read and write" on Kodexa-software/Coordinator-Website,
+# added under this repo's Settings -> Secrets and variables -> Actions.
+name: Website
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger the website deploy
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_DEPLOY_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::WEBSITE_DEPLOY_TOKEN is not set, so the website will catch up on its hourly check. Add the secret under Settings -> Secrets and variables -> Actions."
+            exit 0
+          fi
+          gh workflow run deploy.yml --repo Kodexa-software/Coordinator-Website --ref main
