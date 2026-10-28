@@ -88,6 +88,10 @@ and name the run, as above. When the owner approved on the live page instead, th
 ## Rules
 
 - The owner's words go to `coord` unchanged. Feedback about a running task goes through `coord tell`.
+- Never decide for the owner. Run `approve`, `accept`, `answer`, `merge` and `terminate` only when the owner says
+  so in this conversation, for that run. Defaults, earlier approvals and the parent run's approval never count. A
+  follow-up run's plan waits for its own approval, even though its request says the first run's plan was approved.
+- After you ask the owner (PLAN READY, a question, merge all), end your turn and wait for their reply.
 - Don't open the run's files to report on them; `coord status --text` and `coord wait` print what you need.
 - You may use `/loop` when you need to watch something over time that `coord wait` doesn't cover, such as a
   pull request's checks.

@@ -35,6 +35,8 @@ STORE = ".coordinator"
 WORK = ("build", "merge")
 OPEN = ("queue", "in_progress", "review", "audit")
 WAIT_STATES = ("waiting_on_you", "finished", "planned", "paused")
+AGENT_CMDS = ("task", "audit", "_shoot", "_hook", "_scheduler", "_viewer", "status", "list", "wait")
+OWNER_ONLY = "Only the owner can do this. Ask with `coord task ask`."
 TASK_FILES = ("knowledge.md", "changes.md", "review.md", "resume.md")
 ROLE_NAMES = {"planner": "planner", "builder": "builder", "officer": "hallucination officer", "shooter": "screenshot taker",
               "mapper": "mapper"}
@@ -1361,8 +1363,14 @@ def cmd_wait(a):
 
 def do_approve(r, note=""):
     with r.edit() as d:
-        for t in d["tasks"]:
-            if t["type"] == "plan" and t["status"] in ("waiting_on_you", "audit"):
+        plans = [t for t in d["tasks"] if t["type"] == "plan"]
+        if any(t["status"] == "audit" for t in plans):
+            raise Fail("the hallucination officer is still checking the plan")
+        asking = [t["id"] for t in plans if t["status"] == "waiting_on_you" and t.get("question_kind") != "officer"]
+        if asking:
+            raise Fail("the plan is not ready yet: %s waits for you first (`coord status --text` says what to do)" % asking[0])
+        for t in plans:
+            if t["status"] == "waiting_on_you":
                 t["status"], t["question"], t["question_kind"] = "done", "", ""
         if any(t["type"] == "plan" and t["status"] in OPEN for t in d["tasks"]):
             raise Fail("the plan is not ready yet")
@@ -1427,7 +1435,8 @@ def start_followups(r):
                 name, n = "%s-%d" % (slug(f["name"], 37), n), n + 1
             req = r.dir / ("followup-%s.md" % name)
             req.write_text("%s\n\n[coordinator context: started by run '%s' in %s when the owner approved its plan. This "
-                           "run's part: %s. The rest is built there.]\n" % (words, r.name, r.project, f["note"].rstrip(".")))
+                           "run's part: %s. The rest is built there. This run's own plan still waits for the owner's approval.]\n"
+                           % (words, r.name, r.project, f["note"].rstrip(".")))
             p = subprocess.run([sys.executable, str(ROOT / "bin" / "coord"), "start", "--name", name, "--request-file",
                                 str(req), "--no-open"], cwd=f["repo"], env=env, text=True, capture_output=True,
                                stdin=subprocess.DEVNULL, timeout=300)
@@ -1840,6 +1849,30 @@ def start_merge(r):
 
 # ---------------------------------------------------------------- agent commands
 
+def owner_only(a):
+    """True when an agent runs an owner's command on its own run or that run's family (its first run, every follow-up)."""
+    rd = os.environ.get("COORD_RUN_DIR")
+    if not os.environ.get("COORD_ROLE") or not rd or a.cmd in AGENT_CMDS or (a.cmd == "todo" and a.action != "done"):
+        return False
+    if a.cmd == "update":
+        return True
+    mine = Run(Path(rd).parent.parent, Path(rd).name)
+    try:
+        if a.cmd in ("start", "map"):
+            return Path(project_root()).resolve() == mine.project
+        target = pick_run(getattr(a, "run", None))
+        if target.dir == mine.dir:
+            return True
+        def top(x):
+            t = first_run(x.load())
+            return Run(t["repo"], t["run"]) if t else x
+        root = top(mine)
+        return top(target).dir == root.dir or \
+            (str(target.project), target.name) in {(p["repo"], p["run"]) for p in pull_requests(root, root.load())}
+    except Fail:
+        return False  # no such run: the command itself says so
+
+
 def agent_ctx():
     rd, tid = os.environ.get("COORD_RUN_DIR"), os.environ.get("COORD_TASK")
     if not rd or not tid:
@@ -2003,7 +2036,14 @@ def cmd_hook(a):
     if not rd:
         return 0
     tool, ti = inp.get("tool_name", ""), inp.get("tool_input") or {}
-    if tool == "Bash" and re.match(r"\s*(\S*/)?coord\s", ti.get("command", "") + " "):
+    cmd = ti.get("command", "") if tool == "Bash" else ""
+    if re.search(r"/api/(approve|accept|answer|pause|resume|todo|merge)\b", cmd):
+        # The run's own live page takes the owner's clicks, not an agent's requests
+        port = Run(Path(rd).parent.parent, Path(rd).name).state().get("viewer_port")
+        if port and re.search(r"(127\.0\.0\.1|localhost|0\.0\.0\.0):%s\b" % port, cmd):
+            sys.stderr.write(OWNER_ONLY + "\n")
+            return 2
+    if tool == "Bash" and re.match(r"\s*(\S*/)?coord\s", cmd + " "):
         return 0
     data = read_json(Path(rd) / "tasks.json", {}) or {}
     if data.get("status") == "paused" or data.get("terminating"):
@@ -2011,6 +2051,9 @@ def cmd_hook(a):
         return 2
     tid, role = os.environ.get("COORD_TASK", ""), os.environ.get("COORD_ROLE", "")
     t = next((x for x in data.get("tasks", []) if x["id"] == tid), None)
+    if t and t.get("status") == "waiting_on_you":
+        sys.stderr.write("Your question waits for the owner's answer. End your turn now; you are resumed with the answer.\n")
+        return 2
     if t and t.get("inbox") and role in ("builder", "planner"):
         r = Run(Path(rd).parent.parent, Path(rd).name)
         with r.edit() as d:
@@ -2032,6 +2075,9 @@ def cmd_hook(a):
                 return 2
     if tool in ("Edit", "Write", "NotebookEdit", "MultiEdit") and path:
         real = os.path.realpath(os.path.expanduser(path))
+        if real == os.path.realpath(os.path.join(rd, "tasks.json")):
+            sys.stderr.write("Blocked: only `coord` writes tasks.json; change your own task with `coord task`.\n")
+            return 2
         inside = lambda x: real == os.path.realpath(x) or real.startswith(os.path.realpath(x) + os.sep)
         allowed = [rd] + ([str(Path(rd).parent)] if role in ("planner", "mapper") else []) + ([wt] if role == "builder" and wt else [])
         if role == "builder" and t:
@@ -2617,6 +2663,8 @@ def main(argv=None):
         if not a.text and a.action != "followup":
             ap.error("say what: coord task %s \"...\"" % a.action)
     try:
+        if owner_only(a):
+            raise Fail(OWNER_ONLY)
         code = a.fn(a)
         return code or 0
     except Fail as e:
