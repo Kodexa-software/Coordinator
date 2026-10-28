@@ -856,45 +856,70 @@ def plan_title(r, data):
     return data["name"]
 
 
+TASK_WORDS = {"queue": "○ queued", "in_progress": "● in progress", "review": "● in review", "audit": "● in audit",
+              "waiting_on_you": "**waiting on you**", "done": "✓ done", "skipped": "– skipped"}
+
+
 def pr_body(r, data):
-    rows = []
-    for t in data["tasks"]:
-        if t["type"] not in WORK:
-            continue
-        state = "merged" if t.get("merged") else t["status"].replace("_", " ")
-        rows.append("| %s | %s | %s | %s | %s |" % (t["id"], t["title"].replace("|", "/"), state,
-                                                    human_minutes(t.get("minutes")), human_tokens(t.get("tokens"))))
-    out = ["> Opened by [Coordinator](https://github.com/Kodexa-software/Coordinator) and updated after every merged task.",
-           "", "## Request", ""]
+    work = [t for t in data["tasks"] if t["type"] in WORK]
+    counted = [t for t in work if not t.get("parent") and t["status"] != "skipped"]
+    stamp = dt.datetime.now().astimezone().strftime("%d %b %Y, %H:%M %Z")
+    out = ["**Status:** %s · %d of %d tasks merged · updated %s" % (
+        data["status"].replace("_", " "), sum(1 for t in counted if t.get("merged")), len(counted), stamp),
+        "", "## Request", ""]
+    out += ["> " + line if line else ">" for line in owner_words(data).splitlines()] + [""]
     if (data.get("design") or {}).get("choice"):
-        out[1:1] = ["", "**Design language:** %s" % design_line(data)] + ["> " + line if line else ">" for line in owner_words(data).splitlines()] + [""]
+        out += ["**Design language:** %s" % design_line(data), ""]
+    out += ["## Tasks", "", "| id | task | status | time | tokens |", "|---|---|---|---|---|"]
+    for t in work:
+        state = "✓ merged" if t.get("merged") else TASK_WORDS.get(t["status"], t["status"].replace("_", " "))
+        out.append("| %s | %s | %s | %s | %s |" % (t["id"], t["title"].replace("|", "/"), state,
+                                                  human_minutes(t.get("minutes")), human_tokens(t.get("tokens"))))
+    out.append("")
     plan = r.dir / "plan.md"
     if nonempty(plan):
         out += ["## Plan", "", "<details><summary>%s</summary>" % plan_title(r, data), "", plan.read_text().strip(), "",
                 "</details>", ""]
-    out += ["## Tasks", "", "| id | task | status | time | tokens |", "|---|---|---|---|---|"] + rows
+    followups = data.get("followups") or []
+    if followups:
+        out += ["## Not in this run", ""]
+        out += ["- **%s**: follow-up run `%s` (%s)" % (Path(f["repo"]).name, f.get("run") or f.get("name", ""),
+                                                      f.get("status", "pending")) for f in followups] + [""]
+    out.append("<sub>Opened by [Coordinator](https://github.com/Kodexa-software/Coordinator) and updated as the run works.</sub>")
     return "\n".join(out) + "\n"
 
 
-def sync_pr(r):
-    if not r.cfg.get("push"):
-        return
-    data = r.load()
-    if data.get("mode") != "build" or not data.get("branch"):
-        return
-    branch = data["branch"]
+def push_branch(r, branch):
     if run(["git", "remote", "get-url", "origin"], cwd=r.project, check=False).returncode:
         r.log("push skipped: the repository has no origin remote")
-        return
+        return False
     res = run(["git", "push", "-u", "origin", branch], cwd=r.project, check=False)
     if res.returncode:
         r.log("push failed: %s" % (res.stderr or res.stdout).strip()[-300:])
-        return
+        return False
     r.log("pushed %s" % branch)
+    return True
+
+
+def sync_pr(r, push=True):
+    # push=False only refreshes the body of the run's pull request, when it has one
+    if not r.cfg.get("push"):
+        return
+    data = r.load()
+    if data.get("mode") != "build" or not data.get("branch") or (not push and not data.get("pr_url")):
+        return
+    branch = data["branch"]
+    if push and not push_branch(r, branch):
+        return
     if not r.cfg.get("pr") or not shutil.which("gh"):
         return
     body = r.brain / "pr-body.md"
     body.write_text(pr_body(r, data))
+    if not push:
+        res = run(["gh", "pr", "edit", data["pr_url"], "--body-file", body], cwd=r.project, check=False)
+        if res.returncode:
+            r.log("pull request update failed: %s" % (res.stderr or res.stdout).strip()[-300:])
+        return
     view = run(["gh", "pr", "view", branch, "--json", "url,state"], cwd=r.project, check=False)
     pr = json.loads(view.stdout) if view.returncode == 0 and view.stdout.strip() else {}
     if pr.get("state") == "OPEN":
@@ -910,6 +935,25 @@ def sync_pr(r):
         with r.edit() as d:
             d["pr_url"] = url
         r.log("pull request: %s" % url)
+
+
+def open_pr(r, data):
+    # The run's first change: GitHub refuses a pull request without commits, so an empty start commit opens it at approval
+    if not r.cfg.get("push") or not r.cfg.get("pr"):
+        r.log("pull request skipped: push or pr is off")
+        return
+    if run(["git", "remote", "get-url", "origin"], cwd=r.project, check=False).returncode:
+        r.log("pull request skipped: the repository has no origin remote")
+        return
+    if not shutil.which("gh"):
+        r.log("pull request skipped: gh is not on PATH")
+        return
+    wt = ensure_run_wt(r, data)
+    msg = "Start %s." % plan_title(r, data).rstrip(".")
+    if msg not in git(wt, "log", "--format=%s", "%s..HEAD" % data["base"]).splitlines():
+        ident = [] if git(wt, "config", "user.email", check=False) else ["-c", "user.name=coordinator", "-c", "user.email=coordinator@localhost"]
+        run(["git", *ident, "commit", "--allow-empty", "--no-verify", "-m", msg], cwd=wt)
+    sync_pr(r)
 
 
 def next_jobs(r, data, jobs):
@@ -962,7 +1006,7 @@ def cmd_scheduler(a):
             if t["status"] in ("in_progress", "review"):
                 t["status"], t["resume"] = "queue", True
                 t["resume_msg"] = "Your session was interrupted. Check what is already done, then continue and finish the task."
-    jobs, announced = {}, None
+    jobs, announced, pr_sig, pr_tried = {}, None, None, False
     r.log("scheduler up (pid %d)" % os.getpid())
     while not stop:
         for key, job in list(jobs.items()):
@@ -999,6 +1043,12 @@ def cmd_scheduler(a):
                         tt = find(d, tid)
                         tt.update(status="waiting_on_you", question_kind="stalled",
                                   question="Could not start %s: %s" % (tid, e))
+            if data.get("plan_approved") and data.get("mode") == "build" and not data.get("pr_url") and not pr_tried:
+                pr_tried = True
+                try:
+                    open_pr(r, data)
+                except Exception as e:
+                    r.log("opening the pull request failed: %r" % e)
         with r.edit() as d:
             d["status"] = derive_status(d, bool(jobs))
             status = d["status"]
@@ -1012,9 +1062,17 @@ def cmd_scheduler(a):
         r.set_state(agents={k: {"pid": j.p.pid, "task": j.tid, "role": j.role, "kind": j.kind,
                                 "since": dt.datetime.fromtimestamp(j.t0).astimezone().isoformat(timespec="seconds")}
                             for k, j in jobs.items()})
-        if not jobs and status in ("finished", "planned", "paused"):
-            if status == "finished":
+        sig = [status] + [(t["id"], t["status"], bool(t.get("merged"))) for t in data["tasks"]]
+        stopping = not jobs and status in ("finished", "planned", "paused")
+        try:
+            if stopping and status == "finished":
                 sync_pr(r)
+            elif sig != pr_sig and data.get("pr_url"):
+                sync_pr(r, push=False)
+        except Exception as e:
+            r.log("pull request update failed: %r" % e)
+        pr_sig = sig
+        if stopping:
             break
         sleep_poke(r, 2.0)
     for job in jobs.values():
@@ -1064,8 +1122,12 @@ def cmd_start(a):
     data = {"name": name, "request": request.strip(), "mode": "plan" if a.plan_only else "build",
             "status": "planning", "plan_approved": False, "base": base, "branch": a.branch or "coord/%s" % name,
             "created": now(), "updated": now(), "tasks": [new_task("T0", "Plan the work", "plan")]}
+    if not a.plan_only:
+        ensure_branch(r, data)
     (r.task_dir("T0")).mkdir(parents=True)
     write_json(r.tasks_file, data)
+    if not a.plan_only and r.cfg.get("push"):
+        push_branch(r, data["branch"])
     (r.task_dir("T0") / "knowledge.md").write_text(
         "# T0 - Plan the work\n\n## The owner's request, word for word\n\n%s\n\n## Mode\n\n%s\n" % (
             request.strip(), "Plan only: goals, milestones and tasks that later runs will build."
