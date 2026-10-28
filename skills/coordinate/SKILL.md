@@ -1,7 +1,8 @@
 ---
 name: coordinate
 description: Conduct a background team of Claude Code agents in the current git project - a planner, a hallucination officer, builders in parallel worktrees and reviewers - from one request. Only when the user types /coordinate.
-argument-hint: <request> | plan <goal> | status | update | approve | answer <task> <text> | tell <task> <text> | add <text> | pause | resume | run | shots [note] | accept <task> | retry <task> | stop <task> | list | merge | terminate [--purge]
+argument-hint: <request> | plan <goal> | status | update | approve | answer <task> <text> | tell <task> <text> | add <text> | pause | resume | run | shots [note] | accept <task> | retry <task> | stop <task> | list | merge | terminate
+allowed-tools: Bash(coord:*)
 disable-model-invocation: true
 ---
 
@@ -33,7 +34,7 @@ lines:
 | `todo` | `coord todo` (the steps only the owner can do, recorded by agents) |
 | `todo done <n>` | `coord todo done <n>` |
 | `merge` | `coord merge` (merges every pull request of the run and its follow-up runs, then ends them all), then relay its summary |
-| `terminate [--purge]` | `coord terminate [--purge]`, then relay its summary |
+| `terminate` | `coord terminate` (also deletes the run's task files in `.coordinator/`), then relay its summary |
 | `update` | `coord update`, then relay its line (a new session loads a new version) |
 
 Name the run when the project has more than one coordinator and the owner named one: `coord <command> <name>`
