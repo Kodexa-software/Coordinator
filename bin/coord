@@ -479,6 +479,8 @@ def summary(data, scheduler_alive=None):
     tok = sum(t.get("tokens", 0) for t in data["tasks"])
     mins = sum(t.get("minutes", 0) for t in data["tasks"])
     parts = ["%s: %s" % (data["name"], data["status"].replace("_", " "))]
+    if data.get("full_auto"):
+        parts.append("full auto")
     if tasks:
         parts.append("%d/%d tasks done" % (done, len(tasks)))
     if active:
@@ -1017,8 +1019,9 @@ def pr_body(r, data):
     work = [t for t in data["tasks"] if t["type"] in WORK]
     counted = [t for t in work if not t.get("parent") and t["status"] != "skipped"]
     stamp = dt.datetime.now().astimezone().strftime("%d %b %Y, %H:%M %Z")
-    out = ["**Status:** %s · %d of %d tasks merged · updated %s" % (
-        data["status"].replace("_", " "), sum(1 for t in counted if t.get("merged")), len(counted), stamp),
+    out = ["**Status:** %s%s · %d of %d tasks merged · updated %s" % (
+        data["status"].replace("_", " "), " · full auto" if data.get("full_auto") else "",
+        sum(1 for t in counted if t.get("merged")), len(counted), stamp),
         "", "## Request", ""]
     out += ["> " + line if line else ">" for line in owner_words(data).splitlines()] + [""]
     if (data.get("design") or {}).get("choice"):
@@ -1029,6 +1032,13 @@ def pr_body(r, data):
         out.append("| %s | %s | %s | %s | %s |" % (t["id"], t["title"].replace("|", "/"), state,
                                                   human_minutes(t.get("minutes")), human_tokens(t.get("tokens"))))
     out.append("")
+    # The run's task files go when it ends, so what is left for the owner stays here too
+    todos = [x for x in data.get("todos") or [] if not x.get("done")]
+    external = sorted({f for t in data["tasks"] if t.get("status") == "done" for f in (t.get("external") or [])})
+    if todos or external:
+        out += ["## Left for you", ""]
+        out += ["- %s%s" % ("%s: " % x["task"] if x.get("task") else "", x["text"]) for x in todos]
+        out += ["- Commit `%s`: updated outside the repo, so coord didn't commit it" % f for f in external] + [""]
     plan = r.dir / "plan.md"
     if nonempty(plan):
         out += ["## Plan", "", "<details><summary>%s</summary>" % plan_title(r, data), "", plan.read_text().strip(), "",
@@ -1075,6 +1085,8 @@ def sync_pr(r, push=True):
         return
     view = run(["gh", "pr", "view", branch, "--json", "url,state"], cwd=r.project, check=False)
     pr = json.loads(view.stdout) if view.returncode == 0 and view.stdout.strip() else {}
+    if pr.get("state") == "MERGED":  # a merge right after the run finished: never open a second pull request
+        return
     if pr.get("state") == "OPEN":
         res = run(["gh", "pr", "edit", branch, "--body-file", body], cwd=r.project, check=False)
         url = pr.get("url", "")
@@ -1259,9 +1271,16 @@ def viewer_url(r):
 
 # ---------------------------------------------------------------- owner commands
 
+FULL_AUTO_TAG = re.compile(r"\s*<\s*full[\s_-]*auto\s*>", re.I)
+
+
 def cmd_start(a):
     project = project_root()
     request = Path(a.request_file).read_text() if a.request_file else " ".join(a.request or [])
+    # `<full auto>` at the very start turns full auto on; it is a switch, not part of the request
+    tag = FULL_AUTO_TAG.match(request)
+    full_auto = bool(a.full_auto or tag)
+    request = request[tag.end():] if tag else request
     if not request.strip():
         raise Fail("empty request")
     name = slug(a.name or " ".join(request.split()[:6]))
@@ -1274,7 +1293,7 @@ def cmd_start(a):
     base = r.cfg["base_branch"] or git(project, "rev-parse", "--abbrev-ref", "HEAD")
     data = {"name": name, "request": request.strip(), "mode": "plan" if a.plan_only else "build",
             "status": "planning", "plan_approved": False, "base": base, "branch": a.branch or "coord/%s" % name,
-            "created": now(), "updated": now(), "tasks": [new_task("T0", "Plan the work", "plan")]}
+            "full_auto": full_auto, "created": now(), "updated": now(), "tasks": [new_task("T0", "Plan the work", "plan")]}
     if not a.plan_only:
         ensure_branch(r, data)
     (r.task_dir("T0")).mkdir(parents=True)
@@ -1292,6 +1311,8 @@ def cmd_start(a):
     if url and not a.no_open:
         open_url(url)
     print("started %s - planning. Live page: %s" % (name, url or "(viewer failed to start)"))
+    if full_auto:  # its own line: start_followups reads the line above
+        print("full auto: on - /coordinate decides for you, merges when the run is done and ends it")
 
 
 def ensure_store(project):
@@ -1326,6 +1347,8 @@ def print_status_text(r, data):
     url = viewer_url(r)
     if url:
         print("live page: %s" % url)
+    if data.get("full_auto"):
+        print("FULL AUTO: on - the owner is away; /coordinate decides every item below for them")
     acts = owner_actions(r, data)
     if acts:
         print("WAITING ON YOU:")
@@ -1382,14 +1405,23 @@ def print_status_text(r, data):
 
 def cmd_wait(a):
     r = pick_run(a.run)
-    # Also return when something new waits on the owner (a manual step, a follow-up run), not only on a status change.
-    # The scheduler's own item is left to the check below, which waits out a restart.
+    # Also return when something new waits on the owner (a manual step, a follow-up run), not only on a status change,
+    # and when the owner switches full auto. The scheduler's own item is left to the check below, which waits out a
+    # restart. With --new, what already waits doesn't count: it is armed while the owner is being asked.
     keys = lambda d: {x["key"] for x in owner_actions(r, d, True)}
-    seen = keys(r.load())
+    data = r.load()
+    seen, status, auto = keys(data), data["status"], bool(data.get("full_auto"))
     while True:
-        data = r.load()
-        if data["status"] in WAIT_STATES or keys(data) - seen:
+        try:
+            data = r.load()
+        except Fail:  # merged or terminated from the live page meanwhile
+            print("%s has ended: it was terminated" % r.name)
+            return
+        now_keys = keys(data)
+        if now_keys - seen or bool(data.get("full_auto")) != auto or \
+                (data["status"] != status if a.new else data["status"] in WAIT_STATES):
             break
+        seen &= now_keys  # an item settled and then asked again is new
         if not alive(r.state().get("scheduler_pid")):
             time.sleep(3)
             if not alive(r.state().get("scheduler_pid")) and r.load()["status"] not in WAIT_STATES:
@@ -1464,6 +1496,7 @@ def start_followups(r):
         for f in todo:
             f["status"] = "starting"
         words = owner_words(d)
+        auto = ["--full-auto"] if d.get("full_auto") else []  # the owner is away for every run of the family
     env = other_repo_env()
     for f in todo:
         try:
@@ -1475,7 +1508,7 @@ def start_followups(r):
                            "run's part: %s. The rest is built there. This run's own plan still waits for the owner's approval.]\n"
                            % (words, r.name, r.project, f["note"].rstrip(".")))
             p = subprocess.run([sys.executable, str(ROOT / "bin" / "coord"), "start", "--name", name, "--request-file",
-                                str(req), "--no-open"], cwd=f["repo"], env=env, text=True, capture_output=True,
+                                str(req), "--no-open"] + auto, cwd=f["repo"], env=env, text=True, capture_output=True,
                                stdin=subprocess.DEVNULL, timeout=300)
             m = re.search(r"^started (\S+) - planning\. Live page: (\S+)", p.stdout, re.M)
             if p.returncode or not m:
@@ -1552,6 +1585,25 @@ def do_pause(r):
     with r.edit() as d:
         d["status"] = "paused"
     r.poke()
+
+
+def do_auto(r, on):
+    """Full auto on or off for a run and its follow-up runs. While it is on, /coordinate decides for the owner."""
+    names = []
+    for p in pull_requests(r, r.load()):
+        with Run(p["repo"], p["run"]).edit() as d:
+            d["full_auto"] = on
+        names.append(p["run"])
+    return names
+
+
+def cmd_auto(a):
+    r = pick_run(a.run)
+    names = do_auto(r, a.state == "on")
+    print("full auto %s for %s%s: %s" % (
+        a.state, r.name, " and its follow-up runs %s" % ", ".join(names[1:]) if len(names) > 1 else "",
+        "/coordinate decides for you, merges when the run is done and ends it" if a.state == "on"
+        else "decisions wait for you again"))
 
 
 def do_resume(r):
@@ -2083,7 +2135,7 @@ def cmd_hook(a):
         return 0
     tool, ti = inp.get("tool_name", ""), inp.get("tool_input") or {}
     cmd = ti.get("command", "") if tool == "Bash" else ""
-    if re.search(r"/api/(approve|accept|answer|pause|resume|todo|merge)\b", cmd):
+    if re.search(r"/api/(approve|accept|answer|pause|resume|todo|merge|auto)\b", cmd):
         # The run's own live page takes the owner's clicks, not an agent's requests
         port = Run(Path(rd).parent.parent, Path(rd).name).state().get("viewer_port")
         if port and re.search(r"(127\.0\.0\.1|localhost|0\.0\.0\.0):%s\b" % port, cmd):
@@ -2450,6 +2502,8 @@ def cmd_viewer(a):
                     do_todo_done(r, int(body["n"]))
                 elif act == "/api/merge":
                     start_merge(r)
+                elif act == "/api/auto":
+                    do_auto(r, body["on"] is True)
                 else:
                     return self.send(404, "{}")
                 self.send(200, json.dumps({"ok": True}))
@@ -2589,6 +2643,7 @@ def cmd_shoot(a):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="coord", description="Background coordinator for Claude Code agents.")
+    ap.add_argument("-C", dest="chdir", metavar="<repo>", help="run as if coord was started in <repo>, like git -C")
     sub = ap.add_subparsers(dest="cmd", required=True, metavar="<command>")
 
     p = sub.add_parser("start", help="start a coordinator for a request")
@@ -2597,6 +2652,8 @@ def main(argv=None):
     p.add_argument("--name")
     p.add_argument("--branch", help="run branch (default coord/<name>)")
     p.add_argument("--plan-only", action="store_true", help="plan goals and tasks for later; build nothing")
+    p.add_argument("--full-auto", action="store_true",
+                   help="you're away: /coordinate decides for you, merges and ends the run (also a leading <full auto>)")
     p.add_argument("--no-open", action="store_true")
     p.set_defaults(fn=cmd_start)
 
@@ -2608,7 +2665,14 @@ def main(argv=None):
 
     p = sub.add_parser("wait", help="block until the run needs you or ends (zero tokens)")
     p.add_argument("run", nargs="?")
+    p.add_argument("--new", action="store_true", help="don't return for what already waits on you; for while you're asked")
     p.set_defaults(fn=cmd_wait)
+
+    p = sub.add_parser("auto", help="full auto on or off for a run and its follow-up runs: while it's on, /coordinate "
+                                    "decides for you, merges and ends the run")
+    p.add_argument("state", choices=["on", "off"])
+    p.add_argument("run", nargs="?")
+    p.set_defaults(fn=cmd_auto)
 
     for name, help_ in (("approve", "approve the plan"), ("pause", "pause: agents write a note and stop"),
                         ("resume", "resume a paused or stopped run"), ("run", "build a planned run")):
@@ -2710,6 +2774,10 @@ def main(argv=None):
         a.text = ([a.target] if a.target else []) + a.text + extra
         if not a.text and a.action != "followup":
             ap.error("say what: coord task %s \"...\"" % a.action)
+    if a.chdir:  # another repo's run without `cd`, which may ask for permission
+        if not os.path.isdir(a.chdir):
+            ap.error("-C: no folder %s" % a.chdir)
+        os.chdir(a.chdir)
     try:
         if owner_only(a):
             raise Fail(OWNER_ONLY)

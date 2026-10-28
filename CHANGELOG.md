@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0 - 2026-10-28
+
+- Full auto, off by default: start a request with `<full auto>` and you count as away. The `/coordinate` session
+  decides everything that would wait on you: it approves the plan, answers questions, settles officer stalemates and
+  retries stalled tasks. When the run is done, it merges every pull request and ends every run. The planner,
+  builders, reviewers and officer work exactly as before. Anything it can't settle waits for you, and then nothing
+  is merged.
+- A Full auto switch in the live page's top bar, and `coord auto on|off`, turn it on or off mid-run for a run and
+  its follow-up runs. Follow-up runs started by a full-auto run are in full auto too.
+- `coord wait --new` doesn't return for what already waits on you. `/coordinate` arms it after asking you, so it
+  takes over when you switch full auto on, and sees approvals made on the live page.
+- `coord -C <repo>` runs a command for another repo's run without `cd`, so follow-up runs need no permission
+  prompt.
+- The pull request lists the manual steps and outside files left for you, which stay there after the run's files
+  are deleted.
+- A merge right after a run finishes no longer makes the scheduler open a second pull request for the same branch.
+
 ## 0.5.1 - 2026-10-28
 
 - Each task's branch is deleted once it is merged into the run branch, so only the pull request's branch remains.

@@ -7,7 +7,7 @@
 <p align="center"><a href="https://coordinator.kodexa.workers.dev"><strong>coordinator.kodexa.workers.dev</strong></a></p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.5.0-6a44da?style=flat-square">
+  <img alt="version" src="https://img.shields.io/badge/version-0.6.0-6a44da?style=flat-square">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-151520?style=flat-square">
   <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-151520?style=flat-square">
   <img alt="scheduling" src="https://img.shields.io/badge/scheduling-zero%20tokens-6a44da?style=flat-square">
@@ -84,12 +84,28 @@ Nothing leaves your machine: screenshots and other artifacts stay in the task's 
 
 A local page on `127.0.0.1` shows the tasks moving from queued to done. Read each agent's conversation live, open
 any file or image, approve the plan with an answer per question, and see everything waiting on you in one list.
+The Full auto switch in its top bar hands every decision to `/coordinate` while you're away.
+
+## Full auto
+
+Off by default. Begin a request with `<full auto>`, or flip the switch on the live page, and you count as away.
+The `/coordinate` session takes your place:
+
+- it approves the plan, using the default answers unless your words say otherwise;
+- it answers the agents' questions;
+- it settles officer stalemates and retries stalled tasks;
+- when the run is done, it merges every pull request and ends every run.
+
+The agents work exactly as in any other run. Anything it can't settle waits for you, and then nothing is merged.
+Keep the `/coordinate` session open: it is the one deciding.
 
 ## Commands
 
 | You say | What happens |
 |---|---|
 | `/coordinate <request>` | Start a run |
+| `/coordinate <full auto> <request>` | Start a run while you're away: `/coordinate` decides for you, merges and ends it |
+| `/coordinate auto on` / `auto off` | Switch full auto on or off for the current run |
 | `/coordinate plan <goal>` | Plan only, saved in the project for a later run |
 | `/coordinate status` | Open the live page; what's waiting on you in chat |
 | `/coordinate approve` | Approve the plan (or on the live page, per question); building starts |
