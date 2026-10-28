@@ -261,6 +261,53 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
 .c-first{min-width:0;overflow:hidden;color:var(--co-ink-2);font-weight:500;white-space:nowrap;text-overflow:ellipsis}
 .c-prompt .c-full{padding:8px 0 4px}
 
+/* Paths that open in the viewer: a quiet dotted underline, violet when pointed at */
+[data-path]{cursor:pointer;text-decoration:underline dotted var(--co-line-strong);text-underline-offset:3px;
+  transition:color var(--co-dur-quick) var(--co-ease-arrive),background-color var(--co-dur-quick) var(--co-ease-arrive),text-decoration-color var(--co-dur-quick) var(--co-ease-arrive)}
+[data-path]:hover{color:var(--co-accent-strong);text-decoration-color:var(--co-accent)}
+.md code[data-path]:hover{background:var(--co-accent-soft)}
+.c-arg[data-path]{border-radius:3px}
+
+/* The task folder's files */
+.f-list{display:grid;gap:2px;margin:0;padding:0;list-style:none}
+.f-item{display:flex;align-items:center;gap:12px;width:100%;padding:9px 10px;border:0;border-radius:var(--co-radius-md);background:none;
+  color:var(--co-ink);font:500 var(--co-text-sm)/1.35 var(--co-font-sans);text-align:left;cursor:pointer;
+  transition:background-color var(--co-dur-quick) var(--co-ease-arrive)}
+.f-item:hover{background:var(--co-sunken)}
+.f-ext{flex:none;width:44px;padding:3px 0;border-radius:var(--co-radius-sm);background:var(--co-sunken);color:var(--co-ink-2);
+  font:600 0.6875rem/1.3 var(--co-font-mono);text-align:center;text-transform:uppercase;transition:background-color var(--co-dur-quick) var(--co-ease-arrive)}
+.f-item:hover .f-ext{background:var(--co-surface)}
+.f-name{flex:1;min-width:0;font-family:var(--co-font-mono);font-size:var(--co-text-xs);overflow-wrap:anywhere}
+.f-size{flex:none;color:var(--co-muted);font-size:0.75rem;font-variant-numeric:tabular-nums}
+
+/* File viewer: a modal over the page, slow to arrive, quick to leave */
+.viewer{position:fixed;inset:0;z-index:20;display:grid;grid-template:minmax(0,1fr)/minmax(0,1fr);place-items:center;padding:28px;visibility:hidden;transition:visibility 0s linear var(--co-dur-quick)}
+.viewer.open{visibility:visible;transition:none}
+.v-back{position:absolute;inset:0;background:color-mix(in srgb,var(--co-bg) 64%,transparent);
+  -webkit-backdrop-filter:saturate(1.2) blur(6px);backdrop-filter:saturate(1.2) blur(6px);opacity:0;transition:opacity var(--co-dur-quick) var(--co-ease-leave)}
+.viewer.open .v-back{opacity:1;transition:opacity var(--co-dur-base) var(--co-ease-arrive)}
+.v-panel{position:relative;display:flex;flex-direction:column;width:min(1120px,100%);max-height:100%;min-height:0;
+  background:var(--co-surface);border:1px solid var(--co-line);border-radius:var(--co-radius-lg);box-shadow:var(--co-shadow-2);
+  opacity:0;transform:translateY(var(--co-rise)) scale(.98);
+  transition:opacity var(--co-dur-quick) var(--co-ease-leave),transform var(--co-dur-quick) var(--co-ease-leave)}
+.viewer.open .v-panel{opacity:1;transform:none;transition:opacity var(--co-dur-base) var(--co-ease-arrive),transform var(--co-dur-page) var(--co-ease-arrive)}
+.v-head{display:flex;align-items:flex-start;gap:12px;padding:16px 16px 14px 22px;border-bottom:1px solid var(--co-line)}
+.v-head .grow{flex:1;min-width:0}
+.v-head h2{margin:0;font-size:var(--co-text-base);font-weight:var(--co-weight-strong);letter-spacing:-0.01em;line-height:var(--co-leading-heading);overflow-wrap:anywhere}
+.v-meta{margin-top:5px;color:var(--co-muted);font:var(--co-text-xs)/1.45 var(--co-font-mono);overflow-wrap:anywhere}
+.v-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:20px 22px 28px;border-radius:0 0 var(--co-radius-lg) var(--co-radius-lg)}
+.v-body.img{display:grid;place-items:center;padding:18px;background:var(--co-sunken)}
+.v-img{display:block;max-width:100%;max-height:calc(100vh - 190px);height:auto;border-radius:var(--co-radius-sm);opacity:0;
+  transition:opacity var(--co-dur-base) var(--co-ease-arrive)}
+.v-img.ready{opacity:1}
+.v-code{width:max-content;min-width:100%;margin:0;font:var(--co-text-xs)/1.65 var(--co-font-mono);white-space:pre;tab-size:4;counter-reset:ln}
+.v-code>span{display:block;position:relative;min-height:1.65em;padding-left:5em}
+.v-code>span::before{counter-increment:ln;content:counter(ln);position:absolute;left:0;width:3.6em;color:var(--co-muted);text-align:right;
+  -webkit-user-select:none;user-select:none}
+.v-none{display:grid;gap:4px;justify-items:center;padding:48px 16px;text-align:center}
+.v-none b{font-size:var(--co-text-base);font-weight:var(--co-weight-strong)}
+.v-none span{color:var(--co-muted);font-size:var(--co-text-xs)}
+
 @media (max-width:1100px){.board{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:640px){
   .head-in{padding:12px 16px;gap:10px 12px}
@@ -274,6 +321,9 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
   .d-head{padding:16px 16px 12px}#d-tabs{padding:0 16px}.d-body{padding:16px 16px 32px}
   .c-pick{top:-16px;margin:-16px -16px 16px;padding:10px 16px}
   .c-res{margin-left:4px;padding-left:10px}
+  .viewer{padding:12px}
+  .v-head{padding:14px 12px 12px 16px}.v-body{padding:16px 16px 24px}.v-body.img{padding:12px}
+  .v-img{max-height:calc(100vh - 150px)}
 }
 /* Reduced motion: no keyframed movement, short fades at most */
 @media (prefers-reduced-motion:reduce){
@@ -285,6 +335,7 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
   .c-res details>summary::after,.c-prompt>summary::before{transition:none}
   aside{transform:none;opacity:0;transition:opacity var(--co-dur-quick) linear,visibility 0s linear var(--co-dur-quick)}
   aside.open{opacity:1;transition:opacity var(--co-dur-quick) linear}
+  .v-panel,.viewer.open .v-panel{transform:none;transition:opacity var(--co-dur-quick) linear}
 }
 </style>
 </head>
@@ -335,6 +386,17 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
   <div class="tabs" id="d-tabs" role="tablist" aria-label="Task files"></div>
   <div class="d-body md" id="d-body"></div>
 </aside>
+<div class="viewer" id="viewer" role="dialog" aria-modal="true" aria-labelledby="v-title">
+  <div class="v-back" id="v-back"></div>
+  <div class="v-panel">
+    <div class="v-head">
+      <div class="grow"><h2 id="v-title"></h2><div class="v-meta" id="v-meta"></div></div>
+      <button class="btn icon" id="v-close" aria-label="Close the file">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
+    </div>
+    <div class="v-body" id="v-body" tabindex="0"></div>
+  </div>
+</div>
 <script>
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -507,19 +569,20 @@ async function renderPlan(){
     (await Promise.all(audits.map(async (f)=>`<details class="card report"><summary>${esc(f)}</summary><div class="md">${md(await text("", f))}</div></details>`))).join("") : "");
 }
 
-// The drawer's tabs: the task's files, then its agents' conversation once one has started.
-const CONV = "@conversation";
-function tabsFor(t){ return (t.files_present||[]).concat((t.sessions||[]).length ? [CONV] : []); }
+// The drawer's tabs: the task's notes, every file in its folder, then its agents' conversation once one has started.
+const CONV = "@conversation", FILES = "@files";
+function tabsFor(t){ return (t.files_present||[]).concat((t.folder||[]).length ? [FILES] : [], (t.sessions||[]).length ? [CONV] : []); }
 function drawerTabs(files){
   const tabs = $("#d-tabs"), had = tabs._html;
-  setHTML(tabs, files.map((f)=>`<button data-file="${esc(f)}" role="tab" aria-selected="${f===drawerFile}" class="${f===drawerFile?"on":""}">${f===CONV?"conversation":esc(f.replace(".md",""))}</button>`).join(""));
+  setHTML(tabs, files.map((f)=>`<button data-file="${esc(f)}" role="tab" aria-selected="${f===drawerFile}" class="${f===drawerFile?"on":""}">${f===CONV?"conversation":f===FILES?"files":esc(f.replace(".md",""))}</button>`).join(""));
   if(tabs._html !== had || !tabs.classList.contains("ready")) placeBar(tabs, !tabs.classList.contains("ready"));
 }
 async function showFile(id){
-  const body = $("#d-body"), isConv = drawerFile===CONV;
-  body.classList.toggle("md", !isConv); conv = null;
+  const body = $("#d-body"), isConv = drawerFile===CONV, isFiles = drawerFile===FILES;
+  body.classList.toggle("md", !isConv && !isFiles); conv = null;
   if(isConv) body.innerHTML = '<div class="c-pick" id="c-pick" role="group" aria-label="Agent"></div><div class="c-log" id="c-log"></div>';
-  else body.innerHTML = drawerFile ? md(await text(id, drawerFile)) : '<p class="empty">Nothing written yet.</p>';
+  else if(isFiles){ body.innerHTML = '<ul class="f-list" id="f-list" aria-label="Files in the task folder"></ul>'; renderFolder(state.tasks.find((x)=>x.id===id)); }
+  else { body.innerHTML = drawerFile ? md(await text(id, drawerFile)) : '<p class="empty">Nothing written yet.</p>'; if(drawerFile==="changes.md") markPaths(body, id); }
   body.scrollTop = 0; replay(body, "fade");
   if(isConv){ const t = state.tasks.find((x)=>x.id===id), pick = convChoices(t), live = liveSession(t);
     pickConv(pick.find((c)=>c.key===live) || pick[0]); }
@@ -559,7 +622,7 @@ function pickConv(c){
 }
 function convEntry(e){
   if(e.k==="text") return `<div class="c-say md">${md(e.text)}</div>`;
-  if(e.k==="tool") return `<div class="c-call" data-call="${esc(e.id||"")}"><div class="c-tool"><b>${esc(e.name)}</b><span class="c-arg"${e.path?` data-path="${esc(e.path)}"`:""} title="${esc(e.arg)}">${esc(e.arg)}</span></div></div>`;
+  if(e.k==="tool") return `<div class="c-call" data-call="${esc(e.id||"")}"><div class="c-tool"><b>${esc(e.name)}</b><span class="c-arg"${e.path?` data-path="${esc(e.path)}" tabindex="0" role="button"`:""} title="${esc(e.arg)}">${esc(e.arg)}</span></div></div>`;
   if(e.k==="prompt") return `<details class="c-prompt"><summary><span class="c-tag">Prompt</span><span class="c-first">${esc(e.text.split("\n")[0])}</span></summary><div class="c-full">${esc(e.text)}</div></details>`;
   if(e.k!=="result") return "";
   // First lines shown, the rest one click away.
@@ -602,6 +665,78 @@ async function loadConv(){
   finally{ c.busy = false; }
 }
 
+// The task folder's files, each opening in the viewer.
+function fmtSize(n){ return n < 1024 ? n+" B" : n < 1048576 ? Math.round(n/1024)+" KB" : (n/1048576).toFixed(1)+" MB"; }
+function renderFolder(t){
+  const el = $("#f-list"); if(!el || !t) return;
+  setHTML(el, (t.folder||[]).map((f)=>{ const ext = (f.name.match(/\.([A-Za-z0-9]{1,5})$/)||[,"file"])[1];
+    return `<li><button class="f-item" data-view="${esc(f.name)}"><span class="f-ext" aria-hidden="true">${esc(ext)}</span><span class="f-name">${esc(f.name)}</span><span class="f-size">${fmtSize(f.size)}</span></button></li>`; }).join(""));
+}
+// File paths written in a note (`bin/coord`, `/abs/path/x.png`, `viewer/index.html:12`) open in the viewer.
+const EXT = /\.(md|png|jpe?g|gif|webp|svg|json|jsonl|ya?ml|toml|txt|log|py|js|mjs|cjs|ts|tsx|jsx|css|html|sh|astro|csv|lock)$/i;
+function asPath(s){
+  s = s.trim().replace(/:\d+(-\d+)?$/,"");
+  if(!s || s.length > 400 || /[<>"'`|*?$(){}\[\]=;:,\\]|^[~-]/.test(s) || (/\s/.test(s) && s[0]!=="/")) return "";
+  return /\/[^/]/.test(s) || EXT.test(s) ? s : "";
+}
+// Only paths the viewer can open are marked (each asked once), so a branch name or a MIME type isn't a dead end.
+const opens = new Map();
+function canOpen(path, task){
+  const k = task+"\n"+path;
+  if(!opens.has(k)) opens.set(k, fetch("/api/view?"+new URLSearchParams(Object.assign({path, meta:"1"}, task?{task}:{})),{cache:"no-store"})
+    .then((r)=>r.ok).catch(()=>{ opens.delete(k); return false; }));
+  return opens.get(k);
+}
+async function markPaths(root, task){
+  const codes = [...root.querySelectorAll("code")].filter((c)=>!c.closest("pre,a")).map((c)=>[c, asPath(c.textContent)]).filter((x)=>x[1]);
+  const ok = await Promise.all(codes.map(([,p])=>canOpen(p, task)));
+  codes.forEach(([c,p],i)=>{ if(ok[i] && c.isConnected){ c.dataset.path = p; c.tabIndex = 0; c.setAttribute("role","button"); c.title = "Open "+p; } });
+}
+
+// The viewer: one file at a time over the page, read-only, served by this machine's own coordinator.
+let viewSeq = 0, viewOpener = null;
+const BEHIND = ["header.top","main","#drawer"];
+function viewNone(title, detail){ return `<div class="v-none"><b>${esc(title)}</b><span>${esc(detail)}</span></div>`; }
+async function openViewer(path, folder){
+  const v = $("#viewer"), body = $("#v-body"), seq = ++viewSeq, task = drawer || "";
+  if(!v.classList.contains("open")){ viewOpener = document.activeElement; BEHIND.forEach((s)=>$(s).inert = true); v.classList.add("open"); }
+  const name = path.split("/").filter(Boolean).pop() || path;
+  $("#v-title").textContent = name; $("#v-meta").textContent = path;
+  body.className = "v-body"; body.innerHTML = '<p class="empty">Opening…</p>'; body.scrollTop = 0;
+  $("#v-close").focus({preventScroll:true});
+  const q = "/api/view?" + new URLSearchParams(Object.assign({path}, task?{task}:{}, folder?{in:"folder"}:{}));
+  let m = null;
+  try{ const r = await fetch(q+"&meta=1",{cache:"no-store"}); m = r.ok ? await r.json() : null; }catch(e){}
+  if(seq!==viewSeq) return;
+  const show = (html, cls) => { body.className = "v-body"+(cls?" "+cls:""); body.innerHTML = html; body.scrollTop = 0; replay(body, "fade"); };
+  if(!m) return show(viewNone("Can't open this file", "It isn't in this run's folders, or it's no longer there."));
+  $("#v-title").textContent = m.name; $("#v-meta").textContent = `${m.path} · ${fmtSize(m.size)}`;
+  if(!m.ok) return show(viewNone("Can't preview this file", `${m.name} · ${fmtSize(m.size)}${m.kind==="binary"?"":" · too large to show"}`));
+  if(m.kind==="image"){
+    show(`<img class="v-img" alt="${esc(m.name)}">`, "img");
+    const img = body.querySelector("img");
+    img.onload = () => { if(seq!==viewSeq) return; img.classList.add("ready");
+      if(img.naturalWidth) $("#v-meta").textContent = `${m.path} · ${img.naturalWidth} × ${img.naturalHeight} · ${fmtSize(m.size)}`; };
+    img.onerror = () => { if(seq===viewSeq) show(viewNone("Can't preview this file", `${m.name} · ${fmtSize(m.size)}`)); };
+    img.src = q; return;
+  }
+  let src = null;
+  try{ const r = await fetch(q,{cache:"no-store"}); src = r.ok ? await r.text() : null; }catch(e){}
+  if(seq!==viewSeq) return;
+  if(src===null) return show(viewNone("Can't preview this file", `${m.name} · ${fmtSize(m.size)}`));
+  if(m.kind==="markdown") return show(md(src), "md");
+  const lines = src.replace(/\n$/,"").split("\n");
+  show(`<pre class="v-code">${lines.map((l)=>"<span>"+esc(l)+"</span>").join("")}</pre>`);
+}
+function closeViewer(){
+  const v = $("#viewer"), seq = ++viewSeq; if(!v.classList.contains("open")) return;
+  v.classList.remove("open"); BEHIND.forEach((s)=>$(s).inert = false);
+  if(viewOpener && viewOpener.isConnected) viewOpener.focus({preventScroll:true}); viewOpener = null;
+  // Let it leave, then free what it held (a large image, a long file).
+  setTimeout(()=>{ if(seq===viewSeq){ $("#v-body").innerHTML = ""; } }, ms("--co-dur-quick") + 50);
+}
+const viewerOpen = () => $("#viewer").classList.contains("open");
+
 async function openDrawer(id, keep){
   const t = state && state.tasks.find((x)=>x.id===id); if(!t) return;
   const panel = $("#drawer"), opening = !panel.classList.contains("open"), was = drawerFile;
@@ -618,6 +753,7 @@ async function openDrawer(id, keep){
   if(opening) $("#d-close").focus({preventScroll:true});
   if(!keep || drawerFile!==was) await showFile(t.id);
   else if(drawerFile===CONV){ renderPick(t); loadConv(); }
+  else if(drawerFile===FILES) renderFolder(t);
 }
 function closeDrawer(){
   drawer = null; $("#drawer").classList.remove("open");
@@ -634,8 +770,11 @@ function showTab(tab){
 }
 
 document.addEventListener("click", async (e)=>{
-  const b = e.target.closest("[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],#d-close,#pause,#resume");
+  const b = e.target.closest("[data-path],[data-view],#v-close,#v-back,[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],#d-close,#pause,#resume");
   if(!b) return;
+  if(b.id==="v-close" || b.id==="v-back") return closeViewer();
+  if(b.dataset.path) return openViewer(b.dataset.path);
+  if(b.dataset.view) return openViewer(b.dataset.view, true);
   if(b.id==="pause") return api("/api/pause"); if(b.id==="resume") return api("/api/resume");
   if(b.id==="d-close") return closeDrawer();
   if(b.dataset.file){ if(b.dataset.file===drawerFile) return; drawerFile = b.dataset.file; const t = state.tasks.find((x)=>x.id===drawer);
@@ -655,7 +794,18 @@ document.addEventListener("click", async (e)=>{
 document.addEventListener("focusin",(e)=>{ if(e.target.matches("textarea")) typing=true; });
 document.addEventListener("focusout",(e)=>{ if(e.target.matches("textarea") && !e.target.value.trim()) typing=false; });
 document.addEventListener("keydown",(e)=>{
+  if(e.key==="Escape" && viewerOpen()) return closeViewer();
   if(e.key==="Escape" && drawer) return closeDrawer();
+  // Focus stays inside the viewer while it is open.
+  if(e.key==="Tab" && viewerOpen()){
+    const f = [...$("#viewer").querySelectorAll('button,[href],[tabindex]:not([tabindex="-1"])')].filter((x)=>x.offsetParent || x===document.activeElement);
+    const first = f[0], last = f[f.length-1], inside = $("#viewer").contains(document.activeElement);
+    if(e.shiftKey && (document.activeElement===first || !inside)){ e.preventDefault(); last.focus(); }
+    else if(!e.shiftKey && (document.activeElement===last || !inside)){ e.preventDefault(); first.focus(); }
+    return;
+  }
+  const p = e.target.closest && e.target.closest("[data-path]");
+  if(p && p.tagName!=="BUTTON" && (e.key==="Enter" || e.key===" ")){ e.preventDefault(); return openViewer(p.dataset.path); }
   const t = e.target.closest && e.target.closest(".task");
   if(t && (e.key==="Enter" || e.key===" ")){ e.preventDefault(); openDrawer(t.dataset.task); }
 });
