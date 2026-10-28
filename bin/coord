@@ -1374,7 +1374,7 @@ def cmd_shots(a):
     (r.task_dir(tid) / "knowledge.md").write_text("# %s - Before/after screenshots\n\n## The owner's note\n\n%s\n" % (tid, note))
     r.poke()
     start_daemon(r, "scheduler")
-    print("taking screenshots (%s); the PNG lands on your Desktop" % tid)
+    print("taking screenshots (%s); the PNG lands in %s" % (tid, r.task_dir(tid)))
 
 
 def cmd_map(a):
@@ -1820,6 +1820,18 @@ def compose(cfg, rows, work, dest_base):
     return outs
 
 
+def shots_dir(r):
+    tid = os.environ.get("COORD_TASK")
+    if not tid:
+        ids = sorted((t["id"] for t in r.load()["tasks"] if t["id"].startswith("S")), key=lambda i: int(i[1:]) if i[1:].isdigit() else 0)
+        if not ids:
+            raise Fail("this run has no shots task; start one with coord shots")
+        tid = ids[-1]
+    d = r.task_dir(tid)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def cmd_shoot(a):
     r = pick_run(a.run)
     cfg, dev = r.cfg, r.cfg["dev"]
@@ -1834,8 +1846,7 @@ def cmd_shoot(a):
     run_wt = ensure_run_wt(r, data)
     servers, urls = [], {}
     (r.brain / "logs").mkdir(parents=True, exist_ok=True)
-    work = r.brain / "shots" / dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    work.mkdir(parents=True, exist_ok=True)
+    work = shots_dir(r)
     try:
         for label, wt in (("before", base_wt), ("after", run_wt)):
             port = free_port()
@@ -1860,8 +1871,9 @@ def cmd_shoot(a):
                         shoot(cfg, urls[label] + path, f, w, shots["height"], theme, shots["wait_ms"])
                         files[label] = f
                     rows.append((path, w, theme, files))
-        stamp = dt.datetime.now().strftime("%Y-%m-%d %H.%M")
-        dest_base = Path.home() / "Desktop" / ("%s - %s before-after %s" % (r.project.name, r.name, stamp))
+        dest_base = work / "before-after"
+        if (work / "before-after.png").exists() or (work / "before-after part 1.png").exists():
+            dest_base = work / ("before-after " + dt.datetime.now().strftime("%Y-%m-%d %H.%M.%S"))
         for out in compose(cfg, rows, work, dest_base):
             print(out)
     finally:
@@ -1918,7 +1930,7 @@ def main(argv=None):
     p.add_argument("--run")
     p.set_defaults(fn=cmd_add)
 
-    p = sub.add_parser("shots", help="before/after screenshots of this run, saved to the Desktop")
+    p = sub.add_parser("shots", help="before/after screenshots of this run, saved in the run's task folder")
     p.add_argument("note", nargs="*")
     p.add_argument("--run")
     p.set_defaults(fn=cmd_shots)

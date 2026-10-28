@@ -28,7 +28,7 @@ lines:
 | `tell <task> <text>` | `coord tell <task> "<text>"` (reaches a running agent at its next step) |
 | `add <text>` | `coord add "<text>"` (the planner updates the plan; it returns through the officer to the owner), then re-arm the wait |
 | `pause`, `resume`, `run`, `list` | `coord <command>`; after `resume` or `run`, re-arm the wait |
-| `shots [note]` | `coord shots "<note>"` (an agent takes before/after screenshots to the Desktop) |
+| `shots [note]` | `coord shots "<note>"` (an agent takes before/after screenshots, saved in the task's folder under `.coordinator/`) |
 | `accept <task>`, `retry <task>`, `stop <task>` | `coord <command> <task>` |
 | `terminate [--purge]` | `coord terminate [--purge]`, then relay its summary |
 | `update` | `coord update`, then relay its line (a new session loads a new version) |

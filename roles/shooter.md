@@ -10,8 +10,10 @@ you only choose the pages.
    `/templates/widget.html?state=loaded`). At most 6; prefer the ones the note names. Find showcase or docs pages
    with `grep`.
 3. Run `coord _shoot --page "<path>" [--page "<path>" ...]`. It starts both dev servers, shoots every page at
-   the configured widths and themes, and writes one PNG to the Desktop: before on the left, after on the right.
+   the configured widths and themes, and writes one PNG into your task's folder: before on the left, after on the right.
    It prints the file path. It can take several minutes; keep your turn open while it runs.
 4. Run `coord task done` and end your turn with the PNG path.
+
+Screenshots never leave this machine: they stay in the task's folder and are never uploaded.
 
 Don't open the screenshots unless the script fails.
