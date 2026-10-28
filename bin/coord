@@ -662,17 +662,19 @@ def start_job(r, kind, tid):
     n = len(list(logs.glob("%s-*.json" % tid))) + 1
     if kind == "audit":
         role = "officer"
+        sid = str(uuid.uuid4())
         with r.edit() as d:
             tt = find(d, tid)
             tt["audit_round"] += 1
             tt["audit_verdict"] = ""
+            tt.setdefault("audit_sessions", []).append({"round": tt["audit_round"], "session": sid})
             t = dict(tt)
         cwd = r.project
         model = cfg["models"]["officer"]
         effort = cfg["efforts"]["officer"] if t["type"] == "plan" else cfg["efforts"].get("officer_task", "medium")
         cmd = [cfg["claude"], "-p"] + add_dirs(r, cwd) + ["--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
                "--settings", r.brain / "settings.json", "--output-format", "json", "-n", "%s:%s:officer" % (r.name, tid),
-               "--append-system-prompt", role_prompt("officer"), "--session-id", str(uuid.uuid4()),
+               "--append-system-prompt", role_prompt("officer"), "--session-id", sid,
                audit_prompt(r, data, t)]
     else:
         role = role_of(t)
@@ -1664,12 +1666,122 @@ def cmd_hook(a):
 
 # ---------------------------------------------------------------- live page
 
+TRANSCRIPTS = Path.home() / ".claude" / "projects"
+REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
+TOOL_ARGS = ("file_path", "notebook_path", "command", "pattern", "url", "query", "skill", "description", "prompt")
+PATH_ARGS = ("file_path", "notebook_path")
+
+
+def task_sessions(t):
+    # A task's agent sessions in order: its planner or builder, then each officer audit.
+    out = [{"session": t["session"], "role": role_of(t)}] if t.get("session") else []
+    return out + [{"session": a["session"], "role": "officer", "round": a["round"]} for a in t.get("audit_sessions", [])]
+
+
+def transcript(sid):
+    # Found by session id only, and only under ~/.claude/projects/.
+    base = TRANSCRIPTS.resolve()
+    for p in base.glob("*/%s.jsonl" % sid):
+        p = p.resolve()
+        if base in p.parents and p.is_file():
+            return p
+    return None
+
+
+def subagents(main):
+    # The subagents (reviewers) a session spawned, oldest first, named from the .meta.json beside each.
+    def born(p):
+        try:
+            st = p.stat()
+        except OSError:
+            return 0
+        return getattr(st, "st_birthtime", st.st_mtime)
+    out = []
+    for p in sorted((main.parent / main.stem / "subagents").glob("agent-*.jsonl"), key=born):
+        meta = read_json(p.with_suffix(".meta.json"), {}) or {}
+        out.append({"agent": p.stem, "type": str(meta.get("agentType", ""))[:80],
+                    "description": str(meta.get("description", ""))[:120]})
+    return out
+
+
+def _clip(s, n):
+    return s if len(s) <= n else s[:n] + "…"
+
+
+def conversation_entries(line):
+    # What the live page shows of one transcript line: the agent's text, tool calls, tool results and the prompts
+    # it was given. Everything else (system prompts, API requests, attachments, thinking) is dropped.
+    if b'"type":"user"' not in line and b'"type":"assistant"' not in line:
+        return []
+    try:
+        d = json.loads(line)
+    except ValueError:
+        return []
+    if not isinstance(d, dict) or d.get("type") not in ("user", "assistant") or d.get("isMeta") \
+            or d.get("isCompactSummary"):
+        return []
+    who = d["type"]
+    msg = d.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+    out = []
+    for b in content if isinstance(content, list) else []:
+        kind = b.get("type") if isinstance(b, dict) else None
+        if kind == "text" and isinstance(b.get("text"), str):
+            text = REMINDER_RE.sub("", b["text"]).strip()
+            if text:
+                out.append({"k": "text" if who == "assistant" else "prompt", "text": _clip(text, 20000)})
+        elif kind == "tool_use" and who == "assistant":
+            inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+            key = next((k for k in TOOL_ARGS if isinstance(inp.get(k), str)), None) or \
+                next((k for k, v in inp.items() if isinstance(v, str)), None)
+            e = {"k": "tool", "id": str(b.get("id", ""))[:100], "name": str(b.get("name", ""))[:80],
+                 "arg": _clip(inp[key], 600) if key else ""}
+            if key in PATH_ARGS:
+                e["path"] = inp[key][:4096]
+            out.append(e)
+        elif kind == "tool_result" and who == "user":
+            c = b.get("content")
+            parts = [{"type": "text", "text": c}] if isinstance(c, str) else [x for x in c if isinstance(x, dict)] if isinstance(c, list) else []
+            text = REMINDER_RE.sub("", "\n".join(str(x.get("text", "")) for x in parts if x.get("type") == "text")).strip()
+            e = {"k": "result", "for": str(b.get("tool_use_id", ""))[:100], "text": _clip(text, 8000),
+                 "error": bool(b.get("is_error"))}
+            images = sum(1 for x in parts if x.get("type") == "image")
+            if images:
+                e["images"] = images
+            out.append(e)
+    return out
+
+
+def read_conversation(path, offset, raw_cap=16 << 20, out_cap=256 << 10):
+    # Whole lines from a byte offset; a line still being written waits for the next poll. Capped both ways.
+    entries, used, reset = [], 0, False
+    with open(str(path), "rb") as f:
+        end = f.seek(0, 2)
+        if offset > end:
+            offset, reset = 0, True
+        start = offset
+        f.seek(offset)
+        while offset < end and used < out_cap and offset - start < raw_cap:
+            line = f.readline()
+            if not line.endswith(b"\n"):
+                break
+            offset += len(line)
+            got = conversation_entries(line)
+            entries += got
+            used += sum(len(json.dumps(e)) for e in got)
+    more = offset < end and (used >= out_cap or offset - start >= raw_cap)
+    return {"entries": entries, "next": offset, "more": more, "reset": reset}
+
+
 def view_state(r):
     data = r.load()
     st = r.state()
     for t in data["tasks"]:
         kd = r.task_dir(t["id"])
         t["files_present"] = [f for f in TASK_FILES if nonempty(kd / f)] + sorted(p.name for p in kd.glob("audit-*.md"))
+        t["sessions"] = task_sessions(t)
     data["plan_present"] = nonempty(r.dir / "plan.md")
     data["plan_audits"] = sorted(p.name for p in r.dir.glob("plan-audit-*.md"))
     data["scheduler_alive"] = alive(st.get("scheduler_pid"))
@@ -1685,6 +1797,7 @@ def cmd_viewer(a):
     pref = 7400 + int(hashlib.sha1(str(r.dir).encode()).hexdigest(), 16) % 500
     port = free_port(pref)
     origin = "http://127.0.0.1:%d" % port
+    found = {}  # session id -> transcript path
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -1729,6 +1842,31 @@ def cmd_viewer(a):
                     return self.send(400, "bad request", "text/plain")
                 p = (r.task_dir(tid) if tid else r.dir) / name
                 return self.send(200, p.read_text() if p.exists() else "", "text/plain")
+            if u.path == "/api/conversation":
+                # One agent's conversation from a byte offset, reduced to what the page shows. Looked up by id only,
+                # and only for sessions of this run's tasks.
+                sid, agent, off = (q.get(k, [""])[0] for k in ("session", "agent", "offset"))
+                if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", sid) \
+                        or (agent and not re.fullmatch(r"agent-[0-9a-f]{1,64}", agent)) or not re.fullmatch(r"\d{0,15}", off):
+                    return self.send(400, json.dumps({"error": "bad request"}))
+                try:
+                    data = r.load()
+                except Fail as e:
+                    return self.send(410, json.dumps({"error": str(e)}))
+                if not any(s["session"] == sid for t in data["tasks"] for s in task_sessions(t)):
+                    return self.send(403, json.dumps({"error": "not a session of this run"}))
+                main = found.get(sid)
+                main = main if main and main.is_file() else transcript(sid)
+                if not main:
+                    return self.send(404, json.dumps({"error": "no transcript yet"}))
+                found[sid] = main
+                agents = subagents(main)
+                p = main.parent / main.stem / "subagents" / ("%s.jsonl" % agent) if agent else main
+                if agent and (agent not in [x["agent"] for x in agents] or TRANSCRIPTS.resolve() not in p.resolve().parents):
+                    return self.send(404, json.dumps({"error": "no such subagent"}))
+                reply = read_conversation(p, int(off or 0))
+                reply["agents"] = agents
+                return self.send(200, json.dumps(reply))
             self.send(404, "{}")
 
         def do_POST(self):

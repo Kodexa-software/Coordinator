@@ -217,6 +217,50 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
 #d-tabs button{font:500 var(--co-text-xs)/1 var(--co-font-mono)}
 .d-body{flex:1;overflow:auto;padding:20px 24px 40px}
 
+/* Conversation: the agent's words in the reading face, its tool calls and results quiet and in mono */
+.c-pick{position:sticky;top:-20px;z-index:1;display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:-20px -24px 18px;padding:12px 24px;
+  background:var(--co-surface);background:color-mix(in srgb,var(--co-surface) 90%,transparent);
+  -webkit-backdrop-filter:saturate(1.4) blur(12px);backdrop-filter:saturate(1.4) blur(12px);border-bottom:1px solid var(--co-line)}
+.c-pick:empty{display:none}
+.c-pick button{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 12px;border:1px solid var(--co-line);border-radius:var(--co-radius-pill);
+  background:var(--co-surface);color:var(--co-ink-2);font:600 0.75rem/1 var(--co-font-sans);white-space:nowrap;cursor:pointer;
+  transition:background-color var(--co-dur-quick) var(--co-ease-arrive),border-color var(--co-dur-quick) var(--co-ease-arrive),color var(--co-dur-quick) var(--co-ease-arrive)}
+.c-pick button:hover{border-color:var(--co-line-strong);color:var(--co-ink)}
+.c-pick button.on{border-color:var(--co-accent);background:var(--co-accent-soft);color:var(--co-accent-strong)}
+.c-pick button.sub{padding-left:10px}
+.c-pick button.sub::before{content:"";flex:none;width:6px;height:6px;margin-top:-4px;border-left:1.5px solid var(--co-muted);border-bottom:1.5px solid var(--co-muted);border-bottom-left-radius:2px}
+.c-live{display:inline-flex;align-items:center;gap:5px;margin-right:-6px;padding:0 7px;height:18px;border-radius:var(--co-radius-pill);
+  background:var(--co-info-soft);color:var(--co-info);font-weight:600}
+.c-live::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.c-log{display:grid;gap:10px;min-width:0}
+.c-log>*,.c-call>*{min-width:0}
+.c-call{display:grid;gap:10px}
+.c-say{max-width:var(--co-measure);font-size:var(--co-text-sm);line-height:var(--co-leading-body);margin:6px 0 2px}
+.c-say>:last-child{margin-bottom:0}
+.c-say h1,.c-say h2,.c-say h3,.c-say h4{margin:12px 0 6px;font-size:var(--co-text-base)}
+.c-tool{display:flex;align-items:baseline;gap:9px;padding:6px 10px;border-radius:var(--co-radius-sm);background:var(--co-sunken);
+  font:var(--co-text-xs)/1.45 var(--co-font-mono)}
+.c-tool b{flex:none;color:var(--co-ink);font-weight:600}
+.c-arg{min-width:0;overflow:hidden;color:var(--co-ink-2);white-space:nowrap;text-overflow:ellipsis}
+.c-res{margin:-4px 0 0 10px;padding:2px 0 2px 12px;border-left:2px solid var(--co-line)}
+.c-res.err{border-left-color:var(--co-bad)}
+.c-res pre,.c-full{margin:0;color:var(--co-muted);font:var(--co-text-xs)/1.5 var(--co-font-mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.c-res details>summary,.c-prompt>summary{display:flex;align-items:center;gap:8px;min-width:0;padding:3px 0;color:var(--co-muted);
+  font-size:0.75rem;font-weight:600;cursor:pointer;list-style:none;transition:color var(--co-dur-quick) var(--co-ease-arrive)}
+.c-res details>summary::-webkit-details-marker,.c-prompt>summary::-webkit-details-marker{display:none}
+.c-res details>summary:hover,.c-prompt>summary:hover{color:var(--co-ink)}
+.c-res details>summary::after,.c-prompt>summary::before{content:"";flex:none;width:6px;height:6px;border-right:1.5px solid currentColor;
+  border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform var(--co-dur-base) var(--co-ease-move)}
+.c-res details[open]>summary::after,.c-prompt[open]>summary::before{transform:rotate(45deg)}
+.c-res details[open]>pre,.c-prompt[open]>.c-full{animation:co-fade var(--co-dur-base) var(--co-ease-arrive)}
+.c-tag{display:inline-block;margin:2px 8px 2px 0;padding:1px 7px;border-radius:var(--co-radius-sm);background:var(--co-sunken);
+  color:var(--co-ink-2);font:600 0.75rem/1.4 var(--co-font-sans)}
+.c-tag.bad{background:var(--co-bad-soft);color:var(--co-bad)}
+.c-prompt{padding:8px 12px;border:1px solid var(--co-line);border-radius:var(--co-radius-md)}
+.c-prompt>summary .c-tag{margin:0}
+.c-first{min-width:0;overflow:hidden;color:var(--co-ink-2);font-weight:500;white-space:nowrap;text-overflow:ellipsis}
+.c-prompt .c-full{padding:8px 0 4px}
+
 @media (max-width:1100px){.board{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:640px){
   .head-in{padding:12px 16px;gap:10px 12px}
@@ -228,6 +272,8 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
   .board{grid-template-columns:1fr}
   .plan,.request{padding:20px}
   .d-head{padding:16px 16px 12px}#d-tabs{padding:0 16px}.d-body{padding:16px 16px 32px}
+  .c-pick{top:-16px;margin:-16px -16px 16px;padding:10px 16px}
+  .c-res{margin-left:4px;padding-left:10px}
 }
 /* Reduced motion: no keyframed movement, short fades at most */
 @media (prefers-reduced-motion:reduce){
@@ -236,6 +282,7 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
   .task:hover,.btn:active{transform:none}
   .btn.pr:hover svg{transform:none}
   .tabs.ready::after{transition:none}
+  .c-res details>summary::after,.c-prompt>summary::before{transition:none}
   aside{transform:none;opacity:0;transition:opacity var(--co-dur-quick) linear,visibility 0s linear var(--co-dur-quick)}
   aside.open{opacity:1;transition:opacity var(--co-dur-quick) linear}
 }
@@ -460,31 +507,117 @@ async function renderPlan(){
     (await Promise.all(audits.map(async (f)=>`<details class="card report"><summary>${esc(f)}</summary><div class="md">${md(await text("", f))}</div></details>`))).join("") : "");
 }
 
+// The drawer's tabs: the task's files, then its agents' conversation once one has started.
+const CONV = "@conversation";
+function tabsFor(t){ return (t.files_present||[]).concat((t.sessions||[]).length ? [CONV] : []); }
 function drawerTabs(files){
   const tabs = $("#d-tabs"), had = tabs._html;
-  setHTML(tabs, files.map((f)=>`<button data-file="${esc(f)}" role="tab" aria-selected="${f===drawerFile}" class="${f===drawerFile?"on":""}">${esc(f.replace(".md",""))}</button>`).join(""));
+  setHTML(tabs, files.map((f)=>`<button data-file="${esc(f)}" role="tab" aria-selected="${f===drawerFile}" class="${f===drawerFile?"on":""}">${f===CONV?"conversation":esc(f.replace(".md",""))}</button>`).join(""));
   if(tabs._html !== had || !tabs.classList.contains("ready")) placeBar(tabs, !tabs.classList.contains("ready"));
 }
 async function showFile(id){
-  const body = $("#d-body");
-  body.innerHTML = drawerFile ? md(await text(id, drawerFile)) : '<p class="empty">Nothing written yet.</p>';
+  const body = $("#d-body"), isConv = drawerFile===CONV;
+  body.classList.toggle("md", !isConv); conv = null;
+  if(isConv) body.innerHTML = '<div class="c-pick" id="c-pick" role="group" aria-label="Agent"></div><div class="c-log" id="c-log"></div>';
+  else body.innerHTML = drawerFile ? md(await text(id, drawerFile)) : '<p class="empty">Nothing written yet.</p>';
   body.scrollTop = 0; replay(body, "fade");
+  if(isConv){ const t = state.tasks.find((x)=>x.id===id), pick = convChoices(t), live = liveSession(t);
+    pickConv(pick.find((c)=>c.key===live) || pick[0]); }
 }
+
+// Conversations: each agent session of the task (planner or builder, its reviewers, each officer audit), read from
+// its transcript a few new lines at a time on every refresh.
+let conv = null;
+const agentsOf = {};
+function liveSession(t){
+  const a = Object.values((state && state.agents) || {}).find((x)=>x.task===t.id); if(!a) return null;
+  const s = (t.sessions||[]).filter((x)=>(x.role==="officer")===(a.role==="officer")).pop();
+  return s ? s.session : null;
+}
+function convChoices(t){
+  const out = [], seen = {};
+  (t.sessions||[]).forEach((s)=>{
+    out.push({key:s.session, sid:s.session, agent:"", label:s.role==="officer" ? `Officer · round ${s.round}` : s.role[0].toUpperCase()+s.role.slice(1)});
+    (agentsOf[s.session]||[]).forEach((a)=>{
+      const base = a.type==="coord-reviewer" ? "Reviewer" : (a.description || a.type || "Subagent"), n = seen[base] = (seen[base]||0)+1;
+      out.push({key:s.session+"/"+a.agent, sid:s.session, agent:a.agent, label:n>1 ? `${base} ${n}` : base, sub:true});
+    });
+  });
+  return out;
+}
+function renderPick(t){
+  const el = $("#c-pick"); if(!el || !conv) return;
+  const live = liveSession(t);
+  setHTML(el, convChoices(t).map((c)=>`<button data-conv="${esc(c.key)}" class="${c.sub?"sub":""}${c.key===conv.key?" on":""}" aria-pressed="${c.key===conv.key}">${esc(c.label)}${c.key===live?'<span class="c-live">live</span>':""}</button>`).join(""));
+}
+function pickConv(c){
+  if(!c) return;
+  conv = {key:c.key, sid:c.sid, agent:c.agent, next:0, busy:false};
+  const log = $("#c-log"); log.innerHTML = ""; replay(log, "fade");
+  const t = state.tasks.find((x)=>x.id===drawer); if(t) renderPick(t);
+  loadConv();
+}
+function convEntry(e){
+  if(e.k==="text") return `<div class="c-say md">${md(e.text)}</div>`;
+  if(e.k==="tool") return `<div class="c-call" data-call="${esc(e.id||"")}"><div class="c-tool"><b>${esc(e.name)}</b><span class="c-arg"${e.path?` data-path="${esc(e.path)}"`:""} title="${esc(e.arg)}">${esc(e.arg)}</span></div></div>`;
+  if(e.k==="prompt") return `<details class="c-prompt"><summary><span class="c-tag">Prompt</span><span class="c-first">${esc(e.text.split("\n")[0])}</span></summary><div class="c-full">${esc(e.text)}</div></details>`;
+  if(e.k!=="result") return "";
+  // First lines shown, the rest one click away.
+  const head = e.text.split("\n").slice(0,3).join("\n").slice(0,360), rest = e.text.slice(head.length).replace(/^\n/,""), n = rest ? rest.split("\n").length : 0;
+  return `<div class="c-res${e.error?" err":""}">${e.error?'<span class="c-tag bad">Error</span>':""}${e.images?`<span class="c-tag">${e.images} image${e.images>1?"s":""}</span>`:""}` +
+    (head ? `<pre>${esc(head)}</pre>` : e.images ? "" : '<pre>No output</pre>') +
+    (rest ? `<details><summary>${n>1?`${n} more lines`:"More"}</summary><pre>${esc(rest)}</pre></details>` : "") + "</div>";
+}
+async function loadConv(){
+  const c = conv, body = $("#d-body"), log = $("#c-log"); if(!c || c.busy || !log) return;
+  const first = c.next===0, t = state.tasks.find((x)=>x.id===drawer);
+  c.busy = true;
+  try{
+    for(let i = 0; i < 20; i++){
+      const r = await fetch(`/api/conversation?session=${encodeURIComponent(c.sid)}${c.agent?"&agent="+encodeURIComponent(c.agent):""}&offset=${c.next}`,{cache:"no-store"});
+      const j = await r.json().catch(()=>({}));
+      if(conv!==c) return;
+      if(!r.ok){ if(!log.childElementCount) log.innerHTML = `<p class="empty">${r.status===404?"This agent's transcript isn't on this machine yet.":"This conversation can't be shown."}</p>`; return; }
+      if(j.agents){ const had = JSON.stringify(agentsOf[c.sid]||[]); agentsOf[c.sid] = j.agents; if(t && had!==JSON.stringify(j.agents)) renderPick(t); }
+      if(j.reset) log.innerHTML = "";
+      c.next = j.next;
+      const entries = j.entries||[];
+      if(entries.length){
+        const empty = log.querySelector(".empty"); if(empty) empty.remove();
+        const end = body.scrollHeight - body.scrollTop - body.clientHeight < 32, tpl = document.createElement("template");
+        // Each result goes under its own call: parallel calls are written first, their results after.
+        entries.forEach((e)=>{
+          tpl.innerHTML = convEntry(e); const el = tpl.content.firstElementChild; if(!el) return;
+          if(!first) el.classList.add("fade");
+          const call = e.k==="result" && e.for && log.querySelector(`[data-call="${CSS.escape(e.for)}"]`);
+          (call || log).append(el);
+        });
+        // Follow the conversation only when the owner is already at the end.
+        if(first ? t && liveSession(t)===c.key : end) body.scrollTo({top:body.scrollHeight, behavior:first||reduce.matches?"auto":"smooth"});
+      }
+      if(!j.more) break;
+    }
+    if(first && !log.childElementCount) log.innerHTML = '<p class="empty">Nothing said yet.</p>';
+  }catch(e){}
+  finally{ c.busy = false; }
+}
+
 async function openDrawer(id, keep){
   const t = state && state.tasks.find((x)=>x.id===id); if(!t) return;
-  const panel = $("#drawer"), opening = !panel.classList.contains("open");
+  const panel = $("#drawer"), opening = !panel.classList.contains("open"), was = drawerFile;
   if(opening) opener = document.activeElement;
   drawer = id; panel.classList.add("open");
   (pools.board||new Map()).forEach((el,k)=>el.classList.toggle("sel", k===id));
   $("#d-id").textContent = `${t.id} · ${t.type}`; $("#d-title").textContent = t.title;
   setHTML($("#d-meta"), `<span class="pill sm s-${esc(t.status)}">${LABEL[t.status]||esc(t.status)}</span>` +
     [t.model&&esc(`${t.model}${t.effort?" · "+t.effort:""}`), t.files.length&&`files: <span class="mono">${esc(t.files.join(", "))}</span>`, t.tokens&&esc(`${fmtTok(t.tokens)} tokens · ${fmtMin(t.minutes)}`)].filter(Boolean).map((x)=>`<span>${x}</span>`).join(""));
-  const files = t.files_present || [];
+  const files = tabsFor(t);
   if(!keep || !files.includes(drawerFile)) drawerFile = files[0] || null;
   if(opening) $("#d-tabs").classList.remove("ready");
   drawerTabs(files);
   if(opening) $("#d-close").focus({preventScroll:true});
-  if(!keep) await showFile(t.id);
+  if(!keep || drawerFile!==was) await showFile(t.id);
+  else if(drawerFile===CONV){ renderPick(t); loadConv(); }
 }
 function closeDrawer(){
   drawer = null; $("#drawer").classList.remove("open");
@@ -501,12 +634,14 @@ function showTab(tab){
 }
 
 document.addEventListener("click", async (e)=>{
-  const b = e.target.closest("[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],#d-close,#pause,#resume");
+  const b = e.target.closest("[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],#d-close,#pause,#resume");
   if(!b) return;
   if(b.id==="pause") return api("/api/pause"); if(b.id==="resume") return api("/api/resume");
   if(b.id==="d-close") return closeDrawer();
   if(b.dataset.file){ if(b.dataset.file===drawerFile) return; drawerFile = b.dataset.file; const t = state.tasks.find((x)=>x.id===drawer);
-    drawerTabs((t && t.files_present) || []); return showFile(drawer); }
+    drawerTabs(t ? tabsFor(t) : []); return showFile(drawer); }
+  if(b.dataset.conv){ const t = state.tasks.find((x)=>x.id===drawer); if(!t || (conv && conv.key===b.dataset.conv)) return;
+    return pickConv(convChoices(t).find((c)=>c.key===b.dataset.conv)); }
   const tab = b.dataset.tab || b.dataset.openTab;
   if(tab) return showTab(tab);
   if(b.classList.contains("task")) return openDrawer(b.dataset.task);
