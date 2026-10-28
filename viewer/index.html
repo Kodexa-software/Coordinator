@@ -4,130 +4,301 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Coordinator</title>
-<link rel="icon" href="/logo.svg">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="/assets/fonts/plus-jakarta-sans-latin-wght.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/assets/fonts/fonts.css">
 <style>
+/* Coordinator brand tokens (DESIGN.md, src/styles/tokens.css of the website) */
 :root{
-  --bg:#f5f2ec;--panel:#fffdf8;--ink:#1d2033;--muted:#6f6a5f;--line:#e4ddd0;--chip:#efe9dd;
-  --gold:#a8833f;--gold-soft:#f3e7cc;--ok:#2f7d55;--ok-soft:#e1f1e7;--warn:#9a5b00;--warn-soft:#fbecd2;
-  --bad:#b3403a;--bad-soft:#f8e1de;--blue:#3a4fa0;--blue-soft:#e3e7f7;--shadow:0 1px 2px rgba(20,20,40,.06),0 4px 16px rgba(20,20,40,.05);
+  color-scheme:light dark;
+  --co-bg:#fafafd;--co-surface:#ffffff;--co-sunken:#f2f2f6;--co-line:#dfdfe6;--co-line-strong:#c3c3cc;
+  --co-ink:#151520;--co-ink-2:#464652;--co-muted:#62626d;
+  --co-accent:#6a44da;--co-accent-strong:#5732bb;--co-accent-soft:#edecff;--co-on-accent:#fbfbff;
+  --co-ok:#0b7643;--co-ok-soft:#dff8e6;--co-warn:#935a11;--co-warn-soft:#ffefd1;
+  --co-bad:#b02a2d;--co-bad-soft:#ffe9e6;--co-info:#0065b4;--co-info-soft:#e4f2ff;
+  --co-shadow-color:rgb(21 21 32 / 0.1);
+  --co-shadow-1:0 1px 2px var(--co-shadow-color),0 4px 12px -6px var(--co-shadow-color);
+  --co-shadow-2:0 2px 4px var(--co-shadow-color),0 18px 40px -16px var(--co-shadow-color);
+  --co-focus-ring:0 0 0 2px var(--co-bg),0 0 0 4px var(--co-accent);
+  --co-font-sans:"Plus Jakarta Sans","Plus Jakarta Sans Fallback",ui-sans-serif,system-ui,sans-serif;
+  --co-font-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --co-text-xs:0.8125rem;--co-text-sm:0.875rem;--co-text-base:1rem;--co-text-md:1.125rem;--co-text-lg:1.375rem;
+  --co-weight-strong:650;--co-weight-display:680;
+  --co-leading-heading:1.15;--co-leading-body:1.6;--co-tracking-heading:-0.02em;--co-measure:68ch;
+  --co-radius-sm:6px;--co-radius-md:10px;--co-radius-lg:16px;--co-radius-pill:999px;
+  --co-dur-instant:120ms;--co-dur-quick:200ms;--co-dur-base:320ms;--co-dur-page:440ms;
+  --co-dur-reveal:760ms;--co-dur-sequence:1200ms;
+  --co-ease-arrive:cubic-bezier(0.16,1,0.3,1);--co-ease-move:cubic-bezier(0.65,0,0.35,1);--co-ease-leave:cubic-bezier(0.5,0,0.75,0);
+  --co-stagger:70ms;--co-rise:12px;--co-reveal-blur:8px;
 }
 @media (prefers-color-scheme:dark){:root{
-  --bg:#0f1224;--panel:#171b33;--ink:#ece6d8;--muted:#a49d8c;--line:#2a2f4d;--chip:#21264a;
-  --gold:#e0c27c;--gold-soft:#3a3320;--ok:#6fcf97;--ok-soft:#1d3a2b;--warn:#e9b45f;--warn-soft:#3d2f17;
-  --bad:#f08a80;--bad-soft:#40211f;--blue:#9fb0ff;--blue-soft:#232b55;--shadow:none;
+  --co-bg:#0d0c13;--co-surface:#15151d;--co-sunken:#08080d;--co-line:#2a2a34;--co-line-strong:#41414d;
+  --co-ink:#eeeef2;--co-ink-2:#c3c3cc;--co-muted:#9a9aa5;
+  --co-accent:#aa99ff;--co-accent-strong:#c3b8ff;--co-accent-soft:#262041;--co-on-accent:#0f0d1c;
+  --co-ok:#72d699;--co-ok-soft:#102a1a;--co-warn:#f5bc69;--co-warn-soft:#34220b;
+  --co-bad:#f58b84;--co-bad-soft:#3b1c1a;--co-info:#79b6f4;--co-info-soft:#0f253b;
+  --co-shadow-color:rgb(0 0 0 / 0.55);
 }}
+@media (prefers-reduced-motion:reduce){:root{
+  --co-dur-page:160ms;--co-dur-reveal:200ms;--co-dur-sequence:0ms;--co-stagger:0ms;--co-rise:0px;--co-reveal-blur:0px;
+}}
+
 *{box-sizing:border-box}
-html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif}
-header{display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5}
-header img{width:40px;height:40px;border-radius:10px}
-h1{font:600 20px/1.2 Georgia,"Iowan Old Style",serif;margin:0}
-.sub{color:var(--muted);font-size:12.5px}
-.grow{flex:1;min-width:0}
-.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;letter-spacing:.02em;background:var(--chip);color:var(--muted);white-space:nowrap}
-.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
-.s-running,.s-planning{background:var(--blue-soft);color:var(--blue)}
-.s-waiting_on_you{background:var(--warn-soft);color:var(--warn)}
-.s-finished,.s-planned,.s-done{background:var(--ok-soft);color:var(--ok)}
-.s-paused,.s-skipped{background:var(--chip);color:var(--muted)}
-.s-in_progress,.s-review{background:var(--blue-soft);color:var(--blue)}
-.s-audit{background:var(--gold-soft);color:var(--gold)}
-.s-queue{background:var(--chip);color:var(--muted)}
-.stats{display:flex;gap:18px;color:var(--muted);font-size:12.5px;white-space:nowrap}
-.stats b{color:var(--ink);font-weight:600}
-button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:6px 12px;border-radius:8px;cursor:pointer}
-button:hover{border-color:var(--gold)}
-button.primary{background:var(--gold);border-color:var(--gold);color:#fff}
-@media (prefers-color-scheme:dark){button.primary{color:#1a1608}}
-.bar{height:3px;background:var(--line)}
-.bar>div{height:100%;background:var(--gold);transition:width .6s ease}
-main{padding:20px 24px 60px;max-width:1500px;margin:0 auto}
-.attention{display:grid;gap:12px;margin-bottom:20px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
-.notice{padding:14px 16px;border-left:3px solid var(--warn)}
-.notice h3{margin:0 0 4px;font-size:14px}
-.notice p{margin:0 0 10px;color:var(--muted)}
-.notice textarea{width:100%;min-height:56px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);padding:8px;font:inherit;resize:vertical}
-.row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
-.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:16px}
-.tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:8px 12px;color:var(--muted)}
-.tabs button.on{color:var(--ink);border-bottom-color:var(--gold)}
-.board{display:grid;grid-template-columns:repeat(5,minmax(200px,1fr));gap:14px;align-items:start}
-.col h4{margin:0 0 8px;font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between}
-.col .list{display:grid;gap:8px}
-.task{padding:10px 12px;cursor:pointer;transition:border-color .15s,transform .15s}
-.task:hover{border-color:var(--gold);transform:translateY(-1px)}
-.task .id{font:600 11.5px ui-monospace,Menlo,monospace;color:var(--gold)}
-.task .t{font-weight:600;margin:2px 0 6px}
-.meta{display:flex;flex-wrap:wrap;gap:6px;font-size:11.5px;color:var(--muted)}
-.meta span{background:var(--chip);border-radius:6px;padding:1px 6px}
-.live{color:var(--blue)}
-.empty{color:var(--muted);font-size:12.5px;padding:8px 2px}
-.plan{padding:20px 24px;max-width:900px}
-.waves{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch;margin:4px 0 22px}
-.wave{padding:10px 12px;min-width:150px}
-.wave b{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
-.wave div{font-size:13px}
-.arrow{align-self:center;color:var(--muted)}
-.md h1,.md h2,.md h3{font-family:Georgia,"Iowan Old Style",serif;font-weight:600;line-height:1.25}
-.md h1{font-size:24px;margin:0 0 12px}.md h2{font-size:18px;margin:22px 0 8px}.md h3{font-size:15px;margin:16px 0 6px}
-.md table{border-collapse:collapse;width:100%;margin:8px 0;font-size:13px}
-.md th,.md td{border:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
-.md th{background:var(--chip)}
-.md code{font:12.5px ui-monospace,Menlo,monospace;background:var(--chip);padding:1px 4px;border-radius:4px}
-.md pre{background:var(--chip);padding:10px 12px;border-radius:8px;overflow:auto}
-.md pre code{background:none;padding:0}
-.md blockquote{margin:8px 0;padding:2px 12px;border-left:3px solid var(--gold);color:var(--muted)}
-.md a{color:var(--blue)}
-aside{position:fixed;top:0;right:0;bottom:0;width:min(720px,100vw);background:var(--panel);border-left:1px solid var(--line);box-shadow:-8px 0 30px rgba(0,0,0,.12);transform:translateX(102%);transition:transform .25s ease;z-index:10;display:flex;flex-direction:column}
-aside.open{transform:none}
-aside .head{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:flex-start}
-aside .body{padding:4px 20px 30px;overflow:auto}
-.request{white-space:pre-wrap;padding:16px 18px;font-size:14px}
-@media (max-width:1000px){.board{grid-template-columns:1fr 1fr}.stats{display:none}}
-@media (max-width:600px){.board{grid-template-columns:1fr}header{padding:14px 16px}main{padding:16px}}
-@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--co-bg);color:var(--co-ink);font:400 var(--co-text-sm)/1.5 var(--co-font-sans);
+  -webkit-font-smoothing:antialiased;caret-color:var(--co-accent)}
+::selection{background:var(--co-accent-soft)}
+:focus-visible{outline:2px solid transparent;box-shadow:var(--co-focus-ring)}
+code,.id,.mono{font-family:var(--co-font-mono)}
+h1,h2,h3{text-wrap:balance}
+p,li{text-wrap:pretty}
+
+/* Header */
+header.top{position:sticky;top:0;z-index:5;background:var(--co-bg);
+  background:color-mix(in srgb,var(--co-bg) 86%,transparent);-webkit-backdrop-filter:saturate(1.4) blur(14px);backdrop-filter:saturate(1.4) blur(14px)}
+.head-in{max-width:1500px;margin:0 auto;padding:14px 24px;display:flex;align-items:center;gap:12px 18px;flex-wrap:wrap}
+.brand{flex:none;height:26px;overflow:hidden}
+.brand svg{display:block;height:26px;width:auto}
+.brand .co-ink{stroke:var(--co-ink)}.brand .co-accent{stroke:var(--co-accent)}.brand .co-word{fill:var(--co-ink)}
+.rule{flex:none;width:1px;height:30px;background:var(--co-line)}
+.title{flex:1;min-width:0}
+.title h1{margin:0;font-size:var(--co-text-md);font-weight:var(--co-weight-strong);letter-spacing:var(--co-tracking-heading);
+  line-height:var(--co-leading-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub{margin-top:3px;color:var(--co-muted);font-size:var(--co-text-xs);overflow-wrap:anywhere}
+.sub code{font-size:.92em;color:var(--co-ink-2)}
+.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.progress{height:2px;background:var(--co-line)}
+.progress>div{height:100%;width:0;background:var(--co-accent);transition:width var(--co-dur-reveal) var(--co-ease-arrive)}
+
+/* The signature move: rows draw in, outer first, then the violet centre, then the text sharpens */
+.brand .co-row1,.brand .co-row2,.brand .co-row3{stroke-dasharray:1;animation:co-draw var(--co-dur-reveal) var(--co-ease-arrive) backwards}
+.brand .co-row2{animation-delay:var(--co-stagger)}
+.brand .co-row3{animation-delay:calc(var(--co-stagger) * 3)}
+.brand .co-word{animation:co-fade var(--co-dur-reveal) var(--co-ease-arrive) calc(var(--co-stagger) * 4) backwards}
+.title{animation:co-sharpen var(--co-dur-reveal) var(--co-ease-arrive) calc(var(--co-stagger) * 5) backwards}
+@keyframes co-draw{from{stroke-dashoffset:1}}
+@keyframes co-sharpen{from{opacity:0;filter:blur(var(--co-reveal-blur));transform:translateY(var(--co-rise))}}
+@keyframes co-fade{from{opacity:0}}
+@keyframes co-up{from{opacity:0;transform:translateY(8px)}}
+
+/* Status */
+.pill{display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 11px;border-radius:var(--co-radius-pill);
+  background:var(--co-sunken);color:var(--co-ink-2);font-size:0.75rem;font-weight:600;white-space:nowrap;
+  transition:background-color var(--co-dur-base) var(--co-ease-move),color var(--co-dur-base) var(--co-ease-move)}
+.pill::before{content:"";flex:none;width:7px;height:7px;border-radius:50%;background:currentColor}
+.pill.sm{height:22px;padding:0 8px;gap:6px}
+.s-running,.s-planning,.s-in_progress,.s-review{background:var(--co-info-soft);color:var(--co-info)}
+.s-waiting_on_you{background:var(--co-warn-soft);color:var(--co-warn)}
+.s-finished,.s-planned,.s-done{background:var(--co-ok-soft);color:var(--co-ok)}
+.s-audit{background:var(--co-sunken);color:var(--co-ink)}
+.s-paused,.s-skipped,.s-queue{background:var(--co-sunken);color:var(--co-muted)}
+.flash{animation:co-fade var(--co-dur-base) var(--co-ease-arrive)}
+
+/* Controls */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;padding:0 14px;
+  border:1px solid var(--co-line-strong);border-radius:var(--co-radius-md);background:var(--co-surface);color:var(--co-ink);
+  font:600 var(--co-text-sm)/1 var(--co-font-sans);text-decoration:none;white-space:nowrap;cursor:pointer;
+  transition:background-color var(--co-dur-quick) var(--co-ease-arrive),border-color var(--co-dur-quick) var(--co-ease-arrive),
+    color var(--co-dur-quick) var(--co-ease-arrive),transform var(--co-dur-instant) var(--co-ease-arrive)}
+.btn:hover{border-color:var(--co-muted);background:var(--co-sunken)}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:var(--co-accent);border-color:var(--co-accent);color:var(--co-on-accent)}
+.btn.primary:hover{background:var(--co-accent-strong);border-color:var(--co-accent-strong)}
+.btn.pr{background:var(--co-accent-soft);border-color:transparent;color:var(--co-accent-strong);animation:co-up var(--co-dur-page) var(--co-ease-arrive)}
+.btn.pr:hover{border-color:var(--co-accent)}
+.btn svg{flex:none;transition:transform var(--co-dur-quick) var(--co-ease-arrive)}
+.btn.pr:hover svg{transform:translate(2px,-2px)}
+.btn.icon{width:34px;padding:0}
+textarea{display:block;width:100%;min-height:76px;padding:10px 12px;border:1px solid var(--co-muted);border-radius:var(--co-radius-md);
+  background:var(--co-surface);color:var(--co-ink);font:inherit;resize:vertical;transition:border-color var(--co-dur-quick) var(--co-ease-arrive)}
+textarea:focus{border-color:var(--co-accent)}
+textarea::placeholder{color:var(--co-muted)}
+
+/* Layout */
+main{max-width:1500px;margin:0 auto;padding:22px 24px 72px}
+.stats{display:flex;flex-wrap:wrap;gap:6px 28px;margin:0 0 22px;color:var(--co-muted);font-size:var(--co-text-xs)}
+.stats div{display:flex;align-items:baseline;gap:6px}
+.stats b{color:var(--co-ink);font-size:var(--co-text-md);font-weight:var(--co-weight-strong);letter-spacing:-0.01em;font-variant-numeric:tabular-nums}
+.card{background:var(--co-surface);border:1px solid var(--co-line);border-radius:var(--co-radius-lg);box-shadow:var(--co-shadow-1)}
+.enter{animation:co-up var(--co-dur-page) var(--co-ease-arrive) backwards}
+.view-in{animation:co-up var(--co-dur-page) var(--co-ease-arrive)}
+.fade{animation:co-fade var(--co-dur-base) var(--co-ease-arrive)}
+.empty{color:var(--co-muted);font-size:var(--co-text-xs)}
+
+/* Attention */
+.attention{display:grid;gap:12px;margin-bottom:24px}
+.attention:empty{display:none}
+.notice{position:relative;overflow:hidden;padding:16px 18px 16px 21px}
+.notice::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--co-warn)}
+.notice.bad::before{background:var(--co-bad)}
+.notice h3{margin:0 0 4px;font-size:var(--co-text-base);font-weight:var(--co-weight-strong);letter-spacing:-0.01em}
+.notice h3 .id{margin-right:6px;font-size:.85em;color:var(--co-ink-2)}
+.notice p{margin:0 0 12px;max-width:var(--co-measure);color:var(--co-ink-2)}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+
+/* Tabs */
+.tabs{position:relative;display:flex;gap:2px;margin-bottom:20px;border-bottom:1px solid var(--co-line);overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tabs button{flex:none;padding:12px 12px 13px;border:0;border-radius:var(--co-radius-sm) var(--co-radius-sm) 0 0;background:none;
+  color:var(--co-muted);font:600 var(--co-text-sm)/1 var(--co-font-sans);cursor:pointer;transition:color var(--co-dur-quick) var(--co-ease-arrive)}
+.tabs button:hover,.tabs button.on{color:var(--co-ink)}
+.tabs::after{content:"";position:absolute;left:0;bottom:0;height:2px;width:var(--w,0);transform:translateX(var(--x,0));
+  border-radius:2px;background:var(--co-accent);pointer-events:none}
+.tabs.ready::after{transition:transform var(--co-dur-base) var(--co-ease-move),width var(--co-dur-base) var(--co-ease-move)}
+
+/* Board */
+.board{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;align-items:start}
+.col{padding:10px;background:var(--co-sunken);border:1px solid var(--co-line);border-radius:var(--co-radius-lg)}
+.col-h{display:flex;align-items:center;justify-content:space-between;margin:2px 4px 10px;font-size:var(--co-text-sm);font-weight:var(--co-weight-strong)}
+.count{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:20px;padding:0 6px;border:1px solid var(--co-line);
+  border-radius:var(--co-radius-pill);background:var(--co-surface);color:var(--co-ink-2);font-size:0.75rem;font-variant-numeric:tabular-nums}
+.list{display:grid;gap:8px;min-height:38px}
+.list:empty::before{content:"None";padding:9px 6px;color:var(--co-muted);font-size:var(--co-text-xs)}
+.task{padding:12px 13px;border-radius:var(--co-radius-md);cursor:pointer;
+  transition:border-color var(--co-dur-quick) var(--co-ease-arrive),box-shadow var(--co-dur-quick) var(--co-ease-arrive),transform var(--co-dur-quick) var(--co-ease-arrive)}
+.task:hover{border-color:var(--co-line-strong);box-shadow:var(--co-shadow-2);transform:translateY(-1px)}
+.task.sel{border-color:var(--co-accent)}
+.task .top{display:flex;align-items:center;gap:8px;color:var(--co-muted);font-size:0.75rem}
+.task .id{color:var(--co-ink);font-size:0.75rem;font-weight:600}
+.task .t{margin:5px 0 10px;font-weight:600;line-height:1.4;text-wrap:pretty}
+.meta{display:flex;flex-wrap:wrap;gap:5px;color:var(--co-muted);font-size:0.75rem}
+.meta>span:not(.pill){padding:2px 7px;border-radius:var(--co-radius-sm);background:var(--co-sunken);font-variant-numeric:tabular-nums}
+
+/* Plan and request */
+.plan{max-width:960px;padding:28px 32px}
+.waves{display:flex;flex-wrap:wrap;align-items:stretch;gap:10px;margin:0 0 28px}
+.waves:empty{display:none}
+.wave{min-width:170px;padding:12px 14px;border:1px solid var(--co-line);border-radius:var(--co-radius-md);background:var(--co-sunken)}
+.wave b{display:block;margin-bottom:6px;color:var(--co-muted);font-size:0.75rem;font-weight:var(--co-weight-strong)}
+.wave div{font-size:var(--co-text-xs);line-height:1.5}
+.wave .id{font-size:0.75rem;font-weight:600}
+.arrow{align-self:center;color:var(--co-muted)}
+.reports h2{margin:32px 0 10px}
+.report{margin:10px 0;overflow:hidden;border-radius:var(--co-radius-md);box-shadow:none}
+.report summary{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;cursor:pointer;list-style:none;font:500 var(--co-text-xs) var(--co-font-mono)}
+.report summary::-webkit-details-marker{display:none}
+.report summary::after{content:"";width:7px;height:7px;border-right:1.5px solid var(--co-muted);border-bottom:1.5px solid var(--co-muted);
+  transform:rotate(45deg) translateY(-2px);transition:transform var(--co-dur-base) var(--co-ease-move)}
+.report[open] summary::after{transform:rotate(225deg) translateY(-2px)}
+.report[open] .md{animation:co-fade var(--co-dur-base) var(--co-ease-arrive)}
+.report .md{padding:0 18px 14px}
+.request{max-width:960px;padding:24px 28px;font-size:var(--co-text-base);line-height:var(--co-leading-body);white-space:pre-wrap}
+.note{margin-top:16px;padding-top:14px;border-top:1px solid var(--co-line)}
+
+/* Markdown */
+.md{font-size:var(--co-text-base);line-height:var(--co-leading-body)}
+.md>*{max-width:var(--co-measure)}
+.md>table,.md>pre{max-width:none}
+.md h1,.md h2,.md h3,.md h4{font-weight:var(--co-weight-strong);letter-spacing:var(--co-tracking-heading);line-height:var(--co-leading-heading)}
+.md h1{margin:0 0 14px;font-size:var(--co-text-lg)}.md h2{margin:28px 0 8px;font-size:var(--co-text-md)}
+.md h3,.md h4{margin:20px 0 6px;font-size:var(--co-text-base)}
+.md p{margin:0 0 12px}.md ul,.md ol{margin:0 0 12px;padding-left:22px}.md li{margin:3px 0}
+.md table{width:100%;margin:10px 0 16px;border-collapse:collapse;font-size:var(--co-text-sm);font-variant-numeric:tabular-nums}
+.md th,.md td{padding:7px 10px;border-bottom:1px solid var(--co-line);text-align:left;vertical-align:top}
+.md th{border-bottom-color:var(--co-line-strong);font-weight:var(--co-weight-strong)}
+.md code{padding:1px 5px;border-radius:5px;background:var(--co-sunken);font-size:.86em}
+.md pre{overflow:auto;padding:12px 14px;border:1px solid var(--co-line);border-radius:var(--co-radius-md);background:var(--co-sunken);font-size:var(--co-text-xs)}
+.md pre code{padding:0;background:none;font-size:inherit}
+.md blockquote{margin:10px 0;padding:2px 14px;border-left:3px solid var(--co-line-strong);color:var(--co-ink-2)}
+.md a{color:var(--co-accent);text-underline-offset:3px}
+.md a:hover{color:var(--co-accent-strong)}
+
+/* Drawer: slow to arrive, quick to leave */
+aside{position:fixed;top:0;right:0;bottom:0;z-index:10;display:flex;flex-direction:column;width:min(760px,100vw);
+  background:var(--co-surface);border-left:1px solid var(--co-line);box-shadow:var(--co-shadow-2);
+  transform:translateX(104%);visibility:hidden;transition:transform var(--co-dur-quick) var(--co-ease-leave),visibility 0s linear var(--co-dur-quick)}
+aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-base) var(--co-ease-arrive)}
+.d-head{display:flex;align-items:flex-start;gap:12px;padding:20px 24px 14px}
+.d-head .grow{flex:1;min-width:0}
+.d-id{color:var(--co-muted);font:600 0.75rem var(--co-font-mono)}
+.d-head h2{margin:4px 0 10px;font-size:var(--co-text-lg);font-weight:var(--co-weight-strong);letter-spacing:var(--co-tracking-heading);line-height:var(--co-leading-heading)}
+#d-tabs{margin:0;padding:0 24px}
+#d-tabs button{font:500 var(--co-text-xs)/1 var(--co-font-mono)}
+.d-body{flex:1;overflow:auto;padding:20px 24px 40px}
+
+@media (max-width:1100px){.board{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:640px){
+  .head-in{padding:12px 16px;gap:10px 12px}
+  .brand{width:28px}
+  .rule{display:none}
+  .actions{flex-basis:100%;gap:6px}
+  .btn{height:32px;padding:0 11px}
+  main{padding:18px 16px 56px}
+  .board{grid-template-columns:1fr}
+  .plan,.request{padding:20px}
+  .d-head{padding:16px 16px 12px}#d-tabs{padding:0 16px}.d-body{padding:16px 16px 32px}
+}
+/* Reduced motion: no keyframed movement, short fades at most */
+@media (prefers-reduced-motion:reduce){
+  .brand .co-row1,.brand .co-row2,.brand .co-row3{animation:none}
+  .title,.enter,.view-in,.btn.pr{animation-name:co-fade}
+  .task:hover,.btn:active{transform:none}
+  .btn.pr:hover svg{transform:none}
+  .tabs.ready::after{transition:none}
+  aside{transform:none;opacity:0;transition:opacity var(--co-dur-quick) linear,visibility 0s linear var(--co-dur-quick)}
+  aside.open{opacity:1;transition:opacity var(--co-dur-quick) linear}
+}
 </style>
 </head>
 <body>
-<header>
-  <img src="/logo.svg" alt="">
-  <div class="grow">
-    <h1 id="name">Coordinator</h1>
-    <div class="sub" id="sub">connecting…</div>
+<header class="top">
+  <div class="head-in">
+    <div class="brand" role="img" aria-label="Coordinator"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 308 64" width="308" height="64" aria-hidden="true" focusable="false">
+<g fill="none" stroke-width="7">
+<path class="co-ink co-row1" pathLength="1" d="M54.28 13.97A25.5 25.5 0 1 0 54.28 50.03"/>
+<path class="co-ink co-row2" pathLength="1" d="M47.21 21.04A15.5 15.5 0 1 0 47.21 42.96"/>
+<path class="co-accent co-row3" pathLength="1" d="M40.14 28.11A5.5 5.5 0 1 0 40.14 35.89"/>
+</g>
+<path class="co-word" d="M86.9 47.38Q83.71 47.38 81 46.23Q78.29 45.07 76.28 43Q74.27 40.92 73.15 38.12Q72.02 35.32 72.02 31.99Q72.02 28.66 73.13 25.85Q74.24 23.03 76.25 20.97Q78.26 18.9 80.97 17.76Q83.68 16.62 86.9 16.62Q90.08 16.62 92.61 17.7Q95.14 18.78 96.9 20.55Q98.66 22.32 99.4 24.42L94.67 26.67Q93.8 24.38 91.78 22.91Q89.76 21.44 86.9 21.44Q84.06 21.44 81.9 22.78Q79.73 24.11 78.53 26.47Q77.32 28.83 77.32 31.99Q77.32 35.14 78.53 37.52Q79.73 39.9 81.9 41.23Q84.06 42.56 86.9 42.56Q89.76 42.56 91.78 41.1Q93.8 39.64 94.67 37.34L99.4 39.59Q98.66 41.68 96.9 43.45Q95.14 45.22 92.61 46.3Q90.08 47.38 86.9 47.38Z M113.18 47.38Q110 47.38 107.4 45.91Q104.79 44.43 103.25 41.86Q101.7 39.3 101.7 36.03Q101.7 32.74 103.24 30.2Q104.78 27.65 107.38 26.17Q109.98 24.7 113.18 24.7Q116.39 24.7 118.97 26.17Q121.56 27.64 123.09 30.18Q124.62 32.73 124.62 36.03Q124.62 39.31 123.07 41.88Q121.52 44.44 118.94 45.91Q116.35 47.38 113.18 47.38ZM113.18 42.7Q114.98 42.7 116.36 41.84Q117.73 40.99 118.53 39.47Q119.32 37.96 119.32 36.03Q119.32 34.1 118.53 32.61Q117.73 31.12 116.36 30.25Q114.98 29.38 113.18 29.38Q111.39 29.38 110 30.25Q108.61 31.12 107.81 32.61Q107 34.1 107 36.03Q107 37.96 107.81 39.47Q108.61 40.99 110 41.84Q111.39 42.7 113.18 42.7Z M138.78 47.38Q135.6 47.38 133 45.91Q130.39 44.43 128.85 41.86Q127.3 39.3 127.3 36.03Q127.3 32.74 128.84 30.2Q130.38 27.65 132.98 26.17Q135.58 24.7 138.78 24.7Q141.99 24.7 144.57 26.17Q147.16 27.64 148.69 30.18Q150.22 32.73 150.22 36.03Q150.22 39.31 148.67 41.88Q147.12 44.44 144.54 45.91Q141.95 47.38 138.78 47.38ZM138.78 42.7Q140.58 42.7 141.96 41.84Q143.33 40.99 144.13 39.47Q144.92 37.96 144.92 36.03Q144.92 34.1 144.13 32.61Q143.33 31.12 141.96 30.25Q140.58 29.38 138.78 29.38Q136.99 29.38 135.6 30.25Q134.21 31.12 133.41 32.61Q132.6 34.1 132.6 36.03Q132.6 37.96 133.41 39.47Q134.21 40.99 135.6 41.84Q136.99 42.7 138.78 42.7Z M153.78 46.9V25.18H158.6V29.9L158.2 29.22Q158.94 26.83 160.56 25.88Q162.18 24.93 164.44 24.93H165.74V29.47H163.86Q161.63 29.47 160.26 30.84Q158.88 32.21 158.88 34.71V46.9Z M178.28 47.38Q175.14 47.38 172.66 45.88Q170.18 44.38 168.74 41.79Q167.3 39.21 167.3 36.04Q167.3 32.83 168.75 30.27Q170.2 27.7 172.68 26.2Q175.16 24.7 178.26 24.7Q180.76 24.7 182.71 25.69Q184.66 26.68 185.79 28.44L185 29.53V16.62H190.1V46.9H185.28V42.66L185.82 43.66Q184.7 45.48 182.69 46.43Q180.68 47.38 178.28 47.38ZM178.84 42.7Q180.63 42.7 182.02 41.84Q183.41 40.99 184.21 39.48Q185 37.97 185 36.04Q185 34.11 184.21 32.6Q183.41 31.09 182.02 30.24Q180.63 29.38 178.84 29.38Q177.05 29.38 175.63 30.25Q174.2 31.12 173.4 32.61Q172.6 34.1 172.6 36.04Q172.6 37.97 173.4 39.48Q174.2 40.99 175.62 41.84Q177.04 42.7 178.84 42.7Z M194.54 46.9V25.18H199.64V46.9ZM194.54 22.62V17.1H199.64V22.62Z M204.1 46.9V25.18H208.92V29.45L208.5 28.73Q209.27 26.74 211 25.72Q212.74 24.7 215.06 24.7Q217.48 24.7 219.32 25.74Q221.17 26.78 222.22 28.63Q223.26 30.48 223.26 32.9V46.9H218.16V34.14Q218.16 32.66 217.6 31.6Q217.04 30.55 216.03 29.97Q215.02 29.38 213.71 29.38Q212.39 29.38 211.36 29.97Q210.34 30.55 209.77 31.61Q209.2 32.67 209.2 34.14V46.9Z M233.86 47.38Q231.59 47.38 229.91 46.61Q228.22 45.85 227.3 44.45Q226.38 43.04 226.38 41.14Q226.38 39.35 227.19 37.94Q227.99 36.54 229.67 35.58Q231.34 34.62 233.87 34.22L241.06 33.04V36.94L234.84 38.02Q233.25 38.31 232.47 39.04Q231.68 39.77 231.68 40.97Q231.68 42.1 232.56 42.79Q233.43 43.48 234.76 43.48Q236.45 43.48 237.73 42.75Q239 42.02 239.71 40.77Q240.42 39.52 240.42 38.01V32.4Q240.42 30.96 239.32 30.01Q238.21 29.06 236.36 29.06Q234.66 29.06 233.36 29.97Q232.06 30.88 231.45 32.36L227.28 30.32Q227.9 28.62 229.27 27.36Q230.64 26.1 232.52 25.4Q234.4 24.7 236.56 24.7Q239.2 24.7 241.23 25.68Q243.26 26.65 244.39 28.38Q245.52 30.12 245.52 32.4V46.9H240.7V43.15L241.79 43.12Q240.95 44.48 239.78 45.44Q238.62 46.39 237.13 46.88Q235.65 47.38 233.86 47.38Z M259.41 47.14Q255.77 47.14 253.78 45.14Q251.78 43.14 251.78 39.51V29.72H248.02V25.18H248.46Q250.04 25.18 250.91 24.32Q251.78 23.46 251.78 21.88V20.22H256.88V25.18H261.88V29.72H256.88V39.23Q256.88 40.34 257.26 41.1Q257.64 41.87 258.46 42.26Q259.28 42.66 260.54 42.66Q260.84 42.66 261.22 42.62Q261.6 42.58 261.98 42.54V46.9Q261.42 46.99 260.7 47.07Q259.99 47.14 259.41 47.14Z M275.9 47.38Q272.72 47.38 270.12 45.91Q267.51 44.43 265.97 41.86Q264.42 39.3 264.42 36.03Q264.42 32.74 265.96 30.2Q267.5 27.65 270.1 26.17Q272.7 24.7 275.9 24.7Q279.11 24.7 281.69 26.17Q284.28 27.64 285.81 30.18Q287.34 32.73 287.34 36.03Q287.34 39.31 285.79 41.88Q284.24 44.44 281.66 45.91Q279.07 47.38 275.9 47.38ZM275.9 42.7Q277.7 42.7 279.08 41.84Q280.45 40.99 281.25 39.47Q282.04 37.96 282.04 36.03Q282.04 34.1 281.25 32.61Q280.45 31.12 279.08 30.25Q277.7 29.38 275.9 29.38Q274.11 29.38 272.72 30.25Q271.33 31.12 270.53 32.61Q269.72 34.1 269.72 36.03Q269.72 37.96 270.53 39.47Q271.33 40.99 272.72 41.84Q274.11 42.7 275.9 42.7Z M290.9 46.9V25.18H295.72V29.9L295.32 29.22Q296.06 26.83 297.68 25.88Q299.3 24.93 301.56 24.93H302.86V29.47H300.98Q298.75 29.47 297.38 30.84Q296 32.21 296 34.71V46.9Z"/>
+</svg></div>
+    <span class="rule" aria-hidden="true"></span>
+    <div class="title">
+      <h1 id="name">Coordinator</h1>
+      <div class="sub" id="sub">Connecting…</div>
+    </div>
+    <div class="actions">
+      <span class="pill" id="status">…</span>
+      <a class="btn pr" id="pr" target="_blank" rel="noopener" hidden aria-label="Pull request (opens in a new tab)">Pull request
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M5 11 11 5M6 5h5v5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+      <button class="btn" id="pause" hidden>Pause</button>
+      <button class="btn" id="resume" hidden>Resume</button>
+    </div>
   </div>
-  <div class="stats" id="stats"></div>
-  <span class="pill" id="status">…</span>
-  <button id="pause" hidden>Pause</button>
-  <button id="resume" hidden>Resume</button>
+  <div class="progress"><div id="progress"></div></div>
 </header>
-<div class="bar"><div id="progress" style="width:0"></div></div>
 <main>
+  <div class="stats" id="stats"></div>
   <div class="attention" id="attention"></div>
-  <div class="tabs">
-    <button data-tab="board" class="on">Tasks</button>
-    <button data-tab="plan">Plan</button>
-    <button data-tab="request">Request</button>
+  <div class="tabs" id="tabs" role="tablist">
+    <button data-tab="board" class="on" role="tab" aria-selected="true">Tasks</button>
+    <button data-tab="plan" role="tab" aria-selected="false">Plan</button>
+    <button data-tab="request" role="tab" aria-selected="false">Request</button>
   </div>
   <section id="tab-board"><div class="board" id="board"></div></section>
-  <section id="tab-plan" hidden><div class="card plan"><div class="waves" id="waves"></div><div class="md" id="plan"></div><div id="audits"></div></div></section>
+  <section id="tab-plan" hidden><div class="card plan"><div class="waves" id="waves"></div><div class="md" id="plan"></div><div class="reports" id="audits"></div></div></section>
   <section id="tab-request" hidden><div class="card request" id="request"></div></section>
 </main>
-<aside id="drawer">
-  <div class="head">
-    <div class="grow"><div class="id" id="d-id" style="font:600 12px ui-monospace,Menlo,monospace;color:var(--gold)"></div><h1 id="d-title" style="font-size:18px"></h1><div class="meta" id="d-meta" style="margin-top:6px"></div></div>
-    <button id="d-close" aria-label="Close">✕</button>
+<aside id="drawer" aria-labelledby="d-title">
+  <div class="d-head">
+    <div class="grow"><div class="d-id" id="d-id"></div><h2 id="d-title"></h2><div class="meta" id="d-meta"></div></div>
+    <button class="btn icon" id="d-close" aria-label="Close">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
   </div>
-  <div class="tabs" id="d-tabs" style="padding:0 20px;margin:0"></div>
-  <div class="body md" id="d-body"></div>
+  <div class="tabs" id="d-tabs" role="tablist" aria-label="Task files"></div>
+  <div class="d-body md" id="d-body"></div>
 </aside>
 <script>
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const reduce = matchMedia("(prefers-reduced-motion: reduce)");
+const token = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const ms = (n) => parseFloat(token(n)) || 0;
 const COLS = [["queue","Queued",["queue"]],["work","Working",["in_progress","review"]],["audit","Officer check",["audit"]],
               ["you","Waiting on you",["waiting_on_you","paused"]],["done","Done",["done","skipped"]]];
 const LABEL = {queue:"queued",in_progress:"building",review:"in review",audit:"officer check",waiting_on_you:"waiting on you",
                paused:"paused",done:"done",skipped:"skipped",running:"running",planning:"planning",finished:"finished",planned:"planned"};
-let state = null, drawer = null, drawerFile = null, typing = false;
+let state = null, drawer = null, drawerFile = null, typing = false, opener = null;
 
 function fmtTok(n){ n = n||0; return n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1e3 ? Math.round(n/1e3)+"K" : String(n); }
 function fmtMin(m){ m = Math.round(m||0); return m >= 60 ? Math.floor(m/60)+"h "+String(m%60).padStart(2,"0")+"m" : m+"m"; }
@@ -164,11 +335,56 @@ function md(src){
   return out.join("");
 }
 
+// Rendering helpers: write only what changed, so refreshes don't flicker or replay motion.
+function setHTML(el, html){ if(el._html !== html){ el.innerHTML = html; el._html = html; } }
+function replay(el, cls){ el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); }
+
+// Keyed lists: items [{key, parent, cls, html, attrs}] in order. New items enter, gone items fade out,
+// and items that moved (for example between board columns) glide from their old place.
+const pools = {};
+function sync(name, items){
+  const pool = pools[name] ||= new Map(), motion = !reduce.matches, before = new Map(), keep = new Set(), at = new Map();
+  if(motion) pool.forEach((el,k)=>before.set(k, el.getBoundingClientRect()));
+  let fresh = 0;
+  items.forEach((it)=>{
+    keep.add(it.key);
+    let el = pool.get(it.key);
+    if(!el){
+      el = document.createElement("div"); el.dataset.key = it.key; pool.set(it.key, el);
+      Object.entries(it.attrs||{}).forEach(([k,v])=>el.setAttribute(k,v));
+      el._entering = true; el.style.animationDelay = reduce.matches ? "" : Math.min(fresh++ * ms("--co-stagger"), 400)+"ms";
+      el.addEventListener("animationend",(e)=>{ if(e.target===el){ el._entering = false; el.classList.remove("enter"); el.style.animationDelay = ""; } });
+    }
+    setHTML(el, it.html);
+    const cls = it.cls + (el._entering ? " enter" : ""); if(el.className !== cls) el.className = cls;
+    const kids = [...it.parent.children].filter((c)=>c.dataset.key && !c._leaving), i = at.get(it.parent) || 0;
+    at.set(it.parent, i+1);
+    if(kids[i] !== el) it.parent.insertBefore(el, kids[i] || null);
+  });
+  pool.forEach((el,k)=>{ if(!keep.has(k)){ pool.delete(k); leave(el); } });
+  if(motion) pool.forEach((el,k)=>{
+    const a = before.get(k); if(!a || !a.width) return;
+    const b = el.getBoundingClientRect(), dx = a.left-b.left, dy = a.top-b.top;
+    if(Math.abs(dx)+Math.abs(dy) > 1) el.animate([{transform:`translate(${dx}px,${dy}px)`},{transform:"none"}],{duration:ms("--co-dur-page"),easing:token("--co-ease-move")});
+  });
+}
+function leave(el){
+  el._leaving = true;
+  el.animate([{opacity:1},{opacity:0,transform:reduce.matches?"none":"translateY(-4px)"}],{duration:ms("--co-dur-quick"),easing:token("--co-ease-leave"),fill:"forwards"}).onfinish = () => el.remove();
+}
+// The tab underline slides to the selected tab.
+function placeBar(tabs, instant){
+  const on = tabs.querySelector(".on");
+  if(instant) tabs.classList.remove("ready");
+  tabs.style.setProperty("--x", (on ? on.offsetLeft : 0)+"px"); tabs.style.setProperty("--w", (on ? on.offsetWidth : 0)+"px");
+  if(instant){ void tabs.offsetWidth; tabs.classList.add("ready"); }
+}
+
 async function api(path, body){
   const r = await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})});
   const j = await r.json().catch(()=>({})); if(!r.ok) alertBox(j.error||"failed"); await refresh();
 }
-function alertBox(msg){ const n = document.createElement("div"); n.className="card notice"; n.style.borderLeftColor="var(--bad)"; n.textContent=msg; $("#attention").prepend(n); setTimeout(()=>n.remove(),6000); }
+function alertBox(msg){ const n = document.createElement("div"); n.className="card notice bad enter"; n.setAttribute("role","alert"); n.textContent=msg; $("#attention").prepend(n); setTimeout(()=>leave(n),6000); }
 async function text(task, name){ const r = await fetch(`/api/file?${task?"task="+encodeURIComponent(task)+"&":""}name=${encodeURIComponent(name)}`); return r.ok ? r.text() : ""; }
 
 function waves(tasks){
@@ -178,81 +394,121 @@ function waves(tasks){
     const ds = t.depends_on.filter((d)=>by[d]).map((d)=>depth(by[d],seen)); return lvl[t.id] = ds.length ? Math.max(...ds)+1 : 0; };
   work.forEach((t)=>depth(t)); const groups = [];
   work.forEach((t)=>{ (groups[lvl[t.id]] ||= []).push(t); });
-  return groups.map((g,i)=>`${i?'<span class="arrow">→</span>':""}<div class="card wave"><b>${g.length>1?"In parallel":"Step"} ${i+1}</b>${g.map((t)=>`<div><span class="id" style="font:600 11px ui-monospace,Menlo,monospace;color:var(--gold)">${esc(t.id)}</span> ${esc(t.title)}</div>`).join("")}</div>`).join("");
+  return groups.map((g,i)=>`${i?'<span class="arrow" aria-hidden="true">→</span>':""}<div class="wave"><b>${g.length>1?"In parallel":"Step"} ${i+1}</b>${g.map((t)=>`<div><span class="id">${esc(t.id)}</span> ${esc(t.title)}</div>`).join("")}</div>`).join("");
+}
+
+function card(t, a){
+  return `<div class="top"><span class="id">${esc(t.id)}</span><span>${esc(t.type)}</span></div><div class="t">${esc(t.title)}</div><div class="meta">
+    ${a?`<span class="pill sm s-in_progress">${esc(a.role)} · ${since(a.since)}</span>`:`<span class="pill sm s-${esc(t.status)}">${LABEL[t.status]||esc(t.status)}</span>`}
+    ${t.model?`<span>${esc(t.model)}${t.effort?" · "+esc(t.effort):""}</span>`:""}${t.size&&t.type!=="plan"?`<span>${esc(t.size)}</span>`:""}
+    ${t.depends_on.length?`<span>after ${esc(t.depends_on.join(", "))}</span>`:""}${t.tests?`<span>tests on</span>`:""}${t.audit_round?`<span>officer ×${t.audit_round}</span>`:""}
+    ${t.tokens?`<span>${fmtTok(t.tokens)} · ${fmtMin(t.minutes)}</span>`:""}</div>`;
+}
+
+function renderAttention(s){
+  const items = [];
+  if(!s.plan_approved && s.status==="waiting_on_you" && !s.tasks.some((t)=>t.status==="waiting_on_you"))
+    items.push({key:"plan", cls:"card notice", html:`<h3>The plan is ready for you</h3><p>The hallucination officer has checked it. Read it in the Plan tab, then approve it, or tell the coordinator what to change.</p><div class="row"><button class="btn primary" data-act="approve">Approve the plan</button><button class="btn" data-open-tab="plan">Read the plan</button></div>`});
+  s.tasks.filter((t)=>t.status==="waiting_on_you").forEach((t)=>items.push({key:"q-"+t.id, cls:"card notice", html:
+    `<h3><span class="id">${esc(t.id)}</span>${esc(t.title)}</h3><p>${esc(t.question)}</p><textarea data-answer="${esc(t.id)}" placeholder="Your answer…" aria-label="Your answer to ${esc(t.id)}"></textarea>
+     <div class="row"><button class="btn primary" data-act="answer" data-task="${esc(t.id)}">Send answer</button>${t.question_kind==="officer"||t.type==="plan"?`<button class="btn" data-act="accept" data-task="${esc(t.id)}">Accept as it is</button>`:""}</div>`}));
+  if(!s.scheduler_alive && ["running","planning"].includes(s.status))
+    items.push({key:"down", cls:"card notice bad", html:`<h3>The scheduler is not running</h3><p>Nothing is being worked on. Resume to pick up where it stopped.</p><div class="row"><button class="btn primary" data-act="resume">Resume</button></div>`});
+  const parent = $("#attention"); sync("attention", items.map((it)=>({...it, parent})));
+}
+
+function renderBoard(s){
+  const live = Object.values(s.agents||{}), items = [], shown = {};
+  COLS.forEach(([key,,sts])=>{
+    const col = $("#col-"+key), list = col.querySelector(".list"), ts = s.tasks.filter((t)=>sts.includes(t.status));
+    col.querySelector(".count").textContent = ts.length;
+    ts.forEach((t)=>{ shown[t.id] = t.status; items.push({key:t.id, parent:list, cls:"card task"+(drawer===t.id?" sel":""),
+      attrs:{"data-task":t.id, tabindex:"0", role:"button"}, html:card(t, live.find((x)=>x.task===t.id))}); });
+  });
+  sync("board", items);
+  pools.board.forEach((el,k)=>{ if(el._st && el._st !== shown[k]){ const p = el.querySelector(".pill"); if(p) replay(p,"flash"); } el._st = shown[k]; });
 }
 
 function render(s){
   state = s; document.title = `${s.name} · Coordinator`;
   $("#name").textContent = s.name;
-  $("#sub").innerHTML = `${esc(s.project)} · ${s.mode==="plan"?"plan only":"run branch "+esc(s.branch)} · from ${esc(s.base)}` +
-    (s.pr_url ? ` · <a href="${esc(s.pr_url)}" target="_blank" rel="noopener" style="color:var(--gold)">pull request ↗</a>` : "");
-  const st = $("#status"); st.className = "pill s-"+s.status; st.textContent = LABEL[s.status] || s.status;
+  setHTML($("#sub"), `${esc(s.project)} · ${s.mode==="plan"?"plan only":`run branch <code>${esc(s.branch)}</code>`} · from <code>${esc(s.base)}</code>`);
+  const pr = $("#pr"); pr.hidden = !s.pr_url; if(s.pr_url && pr.getAttribute("href")!==s.pr_url) pr.setAttribute("href", s.pr_url);
+  const st = $("#status"), cls = "pill s-"+s.status; if(st.className !== cls) st.className = cls; st.textContent = LABEL[s.status] || s.status;
   const work = s.tasks.filter((t)=>["build","merge"].includes(t.type));
   const done = work.filter((t)=>["done","skipped"].includes(t.status)).length;
   $("#progress").style.width = (work.length ? 100*done/work.length : 0)+"%";
   const tok = s.tasks.reduce((a,t)=>a+(t.tokens||0),0), mins = s.tasks.reduce((a,t)=>a+(t.minutes||0),0);
   const end = ["finished","planned"].includes(s.status) ? s.updated : null;
   const wall = ((end?Date.parse(end):Date.now()) - Date.parse(s.created))/60000;
-  $("#stats").innerHTML = `<span><b>${done}/${work.length}</b> tasks</span><span><b>${fmtMin(wall)}</b> elapsed</span><span><b>${fmtMin(mins)}</b> agent time</span><span><b>${fmtTok(tok)}</b> tokens</span><span><b>${Object.keys(s.agents||{}).length}</b> agents live</span>`;
+  setHTML($("#stats"), `<div><b>${done}/${work.length}</b>tasks</div><div><b>${fmtMin(wall)}</b>elapsed</div><div><b>${fmtMin(mins)}</b>agent time</div><div><b>${fmtTok(tok)}</b>tokens</div><div><b>${Object.keys(s.agents||{}).length}</b>agents live</div>`);
   $("#pause").hidden = !["running","planning","waiting_on_you"].includes(s.status);
   $("#resume").hidden = !(s.status==="paused" || (!s.scheduler_alive && ["running","planning"].includes(s.status)));
 
-  if(!typing){
-    const att = [];
-    if(!s.plan_approved && s.status==="waiting_on_you" && !s.tasks.some((t)=>t.status==="waiting_on_you"))
-      att.push(`<div class="card notice"><h3>The plan is ready for you</h3><p>The hallucination officer has checked it. Read it in the Plan tab, then approve it — or tell the coordinator what to change.</p><div class="row"><button class="primary" data-act="approve">Approve the plan</button><button data-open-tab="plan">Read the plan</button></div></div>`);
-    s.tasks.filter((t)=>t.status==="waiting_on_you").forEach((t)=>att.push(
-      `<div class="card notice"><h3>${esc(t.id)} · ${esc(t.title)}</h3><p>${esc(t.question)}</p><textarea data-answer="${esc(t.id)}" placeholder="Your answer…"></textarea>
-       <div class="row"><button class="primary" data-act="answer" data-task="${esc(t.id)}">Send answer</button>${t.question_kind==="officer"||t.type==="plan"?`<button data-act="accept" data-task="${esc(t.id)}">Accept as it is</button>`:""}</div></div>`));
-    if(!s.scheduler_alive && ["running","planning"].includes(s.status))
-      att.push(`<div class="card notice" style="border-left-color:var(--bad)"><h3>The scheduler is not running</h3><p>Nothing is being worked on. Resume to pick up where it stopped.</p><div class="row"><button class="primary" data-act="resume">Resume</button></div></div>`);
-    $("#attention").innerHTML = att.join("");
-  }
-
-  const live = Object.values(s.agents||{});
-  $("#board").innerHTML = COLS.map(([key,label,sts])=>{
-    const items = s.tasks.filter((t)=>sts.includes(t.status));
-    return `<div class="col"><h4><span>${label}</span><span>${items.length}</span></h4><div class="list">${items.map((t)=>{
-      const a = live.find((x)=>x.task===t.id);
-      return `<div class="card task" data-task="${esc(t.id)}"><div class="id">${esc(t.id)} · ${esc(t.type)}</div><div class="t">${esc(t.title)}</div><div class="meta">
-        ${a?`<span class="live">● ${esc(a.role)} ${since(a.since)}</span>`:`<span class="pill s-${t.status}" style="padding:0 7px;font-size:11px">${LABEL[t.status]||t.status}</span>`}
-        ${t.model?`<span>${esc(t.model)}${t.effort?" · "+esc(t.effort):""}</span>`:""}${t.size&&t.type!=="plan"?`<span>${esc(t.size)}</span>`:""}
-        ${t.depends_on.length?`<span>after ${esc(t.depends_on.join(", "))}</span>`:""}${t.tests?`<span>tests on</span>`:""}${t.audit_round?`<span>officer ×${t.audit_round}</span>`:""}
-        ${t.tokens?`<span>${fmtTok(t.tokens)} · ${fmtMin(t.minutes)}</span>`:""}</div></div>`; }).join("") || '<div class="empty">—</div>'}</div></div>`;
-  }).join("");
-  $("#request").innerHTML = esc(s.request) + (s.owner_notes||[]).map((n)=>`<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)"><div class="sub">${esc(n.at.slice(0,16).replace("T"," "))} · ${esc(n.kind)}${n.task?" to "+esc(n.task):""}</div>${esc(n.text)}</div>`).join("");
-  $("#waves").innerHTML = waves(s.tasks);
+  if(!typing) renderAttention(s);
+  renderBoard(s);
+  setHTML($("#request"), esc(s.request) + (s.owner_notes||[]).map((n)=>`<div class="note"><div class="sub">${esc(n.at.slice(0,16).replace("T"," "))} · ${esc(n.kind)}${n.task?" to "+esc(n.task):""}</div>${esc(n.text)}</div>`).join(""));
+  setHTML($("#waves"), waves(s.tasks));
   if(drawer) openDrawer(drawer, true);
 }
 
 async function renderPlan(){
   if(!state) return;
-  $("#plan").innerHTML = state.plan_present ? md(await text("", "plan.md")) : '<p class="empty">The planner is still writing the plan.</p>';
+  setHTML($("#plan"), state.plan_present ? md(await text("", "plan.md")) : '<p class="empty">The planner is still writing the plan.</p>');
   const audits = state.plan_audits || [];
-  $("#audits").innerHTML = audits.length ? `<h2 style="font-family:Georgia,serif;font-size:18px;margin-top:26px">Officer reports</h2>` +
-    (await Promise.all(audits.map(async (f)=>`<details class="card" style="padding:10px 14px;margin:8px 0"><summary>${esc(f)}</summary><div class="md">${md(await text("", f))}</div></details>`))).join("") : "";
+  setHTML($("#audits"), audits.length ? `<h2>Officer reports</h2>` +
+    (await Promise.all(audits.map(async (f)=>`<details class="card report"><summary>${esc(f)}</summary><div class="md">${md(await text("", f))}</div></details>`))).join("") : "");
 }
 
+function drawerTabs(files){
+  const tabs = $("#d-tabs"), had = tabs._html;
+  setHTML(tabs, files.map((f)=>`<button data-file="${esc(f)}" role="tab" aria-selected="${f===drawerFile}" class="${f===drawerFile?"on":""}">${esc(f.replace(".md",""))}</button>`).join(""));
+  if(tabs._html !== had || !tabs.classList.contains("ready")) placeBar(tabs, !tabs.classList.contains("ready"));
+}
+async function showFile(id){
+  const body = $("#d-body");
+  body.innerHTML = drawerFile ? md(await text(id, drawerFile)) : '<p class="empty">Nothing written yet.</p>';
+  body.scrollTop = 0; replay(body, "fade");
+}
 async function openDrawer(id, keep){
   const t = state && state.tasks.find((x)=>x.id===id); if(!t) return;
-  drawer = id; $("#drawer").classList.add("open");
+  const panel = $("#drawer"), opening = !panel.classList.contains("open");
+  if(opening) opener = document.activeElement;
+  drawer = id; panel.classList.add("open");
+  (pools.board||new Map()).forEach((el,k)=>el.classList.toggle("sel", k===id));
   $("#d-id").textContent = `${t.id} · ${t.type}`; $("#d-title").textContent = t.title;
-  $("#d-meta").innerHTML = `<span class="pill s-${t.status}">${LABEL[t.status]||t.status}</span>` + [t.model&&`${t.model}${t.effort?" · "+t.effort:""}`, t.files.length&&`files: ${t.files.join(", ")}`, t.tokens&&`${fmtTok(t.tokens)} tokens · ${fmtMin(t.minutes)}`].filter(Boolean).map((x)=>`<span>${esc(x)}</span>`).join("");
+  setHTML($("#d-meta"), `<span class="pill sm s-${esc(t.status)}">${LABEL[t.status]||esc(t.status)}</span>` +
+    [t.model&&esc(`${t.model}${t.effort?" · "+t.effort:""}`), t.files.length&&`files: <span class="mono">${esc(t.files.join(", "))}</span>`, t.tokens&&esc(`${fmtTok(t.tokens)} tokens · ${fmtMin(t.minutes)}`)].filter(Boolean).map((x)=>`<span>${x}</span>`).join(""));
   const files = t.files_present || [];
   if(!keep || !files.includes(drawerFile)) drawerFile = files[0] || null;
-  $("#d-tabs").innerHTML = files.map((f)=>`<button data-file="${esc(f)}" class="${f===drawerFile?"on":""}">${esc(f.replace(".md",""))}</button>`).join("");
-  if(!keep) $("#d-body").innerHTML = drawerFile ? md(await text(t.id, drawerFile)) : '<p class="empty">Nothing written yet.</p>';
+  if(opening) $("#d-tabs").classList.remove("ready");
+  drawerTabs(files);
+  if(opening) $("#d-close").focus({preventScroll:true});
+  if(!keep) await showFile(t.id);
+}
+function closeDrawer(){
+  drawer = null; $("#drawer").classList.remove("open");
+  (pools.board||new Map()).forEach((el)=>el.classList.remove("sel"));
+  if(opener && opener.isConnected) opener.focus({preventScroll:true}); opener = null;
+}
+function showTab(tab){
+  const tabs = $("#tabs");
+  tabs.querySelectorAll("[data-tab]").forEach((x)=>{ const on = x.dataset.tab===tab; x.classList.toggle("on",on); x.setAttribute("aria-selected",on); });
+  placeBar(tabs);
+  ["board","plan","request"].forEach((x)=>{ const el = $("#tab-"+x);
+    if(x!==tab) el.hidden = true; else if(el.hidden){ el.hidden = false; replay(el, "view-in"); } });
+  if(tab==="plan") renderPlan();
 }
 
 document.addEventListener("click", async (e)=>{
   const b = e.target.closest("[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],#d-close,#pause,#resume");
   if(!b) return;
   if(b.id==="pause") return api("/api/pause"); if(b.id==="resume") return api("/api/resume");
-  if(b.id==="d-close"){ drawer=null; $("#drawer").classList.remove("open"); return; }
-  if(b.dataset.file){ drawerFile=b.dataset.file; [...$("#d-tabs").children].forEach((x)=>x.classList.toggle("on",x===b)); $("#d-body").innerHTML = md(await text(drawer, drawerFile)); return; }
+  if(b.id==="d-close") return closeDrawer();
+  if(b.dataset.file){ if(b.dataset.file===drawerFile) return; drawerFile = b.dataset.file; const t = state.tasks.find((x)=>x.id===drawer);
+    drawerTabs((t && t.files_present) || []); return showFile(drawer); }
   const tab = b.dataset.tab || b.dataset.openTab;
-  if(tab){ document.querySelectorAll(".tabs [data-tab]").forEach((x)=>x.classList.toggle("on",x.dataset.tab===tab));
-    ["board","plan","request"].forEach((x)=>$("#tab-"+x).hidden = x!==tab); if(tab==="plan") renderPlan(); return; }
+  if(tab) return showTab(tab);
   if(b.classList.contains("task")) return openDrawer(b.dataset.task);
   const act = b.dataset.act;
   if(act==="approve") return api("/api/approve");
@@ -263,14 +519,23 @@ document.addEventListener("click", async (e)=>{
 });
 document.addEventListener("focusin",(e)=>{ if(e.target.matches("textarea")) typing=true; });
 document.addEventListener("focusout",(e)=>{ if(e.target.matches("textarea") && !e.target.value.trim()) typing=false; });
-document.addEventListener("keydown",(e)=>{ if(e.key==="Escape" && drawer){ drawer=null; $("#drawer").classList.remove("open"); } });
+document.addEventListener("keydown",(e)=>{
+  if(e.key==="Escape" && drawer) return closeDrawer();
+  const t = e.target.closest && e.target.closest(".task");
+  if(t && (e.key==="Enter" || e.key===" ")){ e.preventDefault(); openDrawer(t.dataset.task); }
+});
+addEventListener("resize",()=>{ placeBar($("#tabs"), true); if(drawer) placeBar($("#d-tabs"), true); });
+
+$("#board").innerHTML = COLS.map(([key,label])=>`<section class="col" id="col-${key}" aria-label="${label}"><h2 class="col-h"><span>${label}</span><span class="count">0</span></h2><div class="list"></div></section>`).join("");
+placeBar($("#tabs"), true);
+document.fonts && document.fonts.ready.then(()=>placeBar($("#tabs"), true));
 
 async function refresh(){
-  try{ const r = await fetch("/api/state",{cache:"no-store"}); if(r.status===410){ $("#sub").textContent="This coordinator was terminated."; return; }
+  try{ const r = await fetch("/api/state",{cache:"no-store"}); if(r.status===410){ setHTML($("#sub"), "This coordinator was terminated."); return; }
        render(await r.json()); if(!$("#tab-plan").hidden) renderPlan(); }
-  catch(e){ $("#sub").textContent = "The coordinator is not answering — it may have been terminated."; }
+  catch(e){ setHTML($("#sub"), "The coordinator is not answering. It may have been terminated."); }
 }
-refresh().then(()=>{ const tab = location.hash.slice(1); if(["plan","request"].includes(tab)) document.querySelector(`[data-tab="${tab}"]`).click(); });
+refresh().then(()=>{ const tab = location.hash.slice(1); if(["plan","request"].includes(tab)) showTab(tab); });
 setInterval(refresh, 3000);
 </script>
 </body>

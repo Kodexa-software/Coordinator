@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2 2 60 60" width="32" height="32">
+  <style>
+    .co-ink{stroke:var(--co-ink,#151520)}
+    .co-accent{stroke:var(--co-accent,#6a44da)}
+    @media (prefers-color-scheme:dark){
+      .co-ink{stroke:var(--co-ink,#eeeef2)}
+      .co-accent{stroke:var(--co-accent,#aa99ff)}
+    }
+  </style>
+  <g fill="none" stroke-width="7">
+    <path class="co-ink co-row1" d="M54.28 13.97A25.5 25.5 0 1 0 54.28 50.03"/>
+    <path class="co-ink co-row2" d="M47.21 21.04A15.5 15.5 0 1 0 47.21 42.96"/>
+    <path class="co-accent co-row3" d="M40.14 28.11A5.5 5.5 0 1 0 40.14 35.89"/>
+  </g>
+</svg>
