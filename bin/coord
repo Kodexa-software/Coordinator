@@ -48,9 +48,10 @@ DEFAULTS = {
     "dev": {"command": "", "cwd": ".", "ready_path": "/"},
     "shots": {"widths": [1280, 390], "themes": ["light", "dark"], "height": 900, "wait_ms": 1500},
     "models": {"planner": "opus", "builder": "opus", "reviewer": "opus", "officer": "opus", "shooter": "haiku",
-               "mapper": "opus"},
+               "mapper": "opus", "briefer": "sonnet"},
     "efforts": {"planner": "high", "builder": "high", "reviewer": "medium", "officer": "high",
-                "officer_task": "medium", "shooter": "low", "mapper": "medium"},
+                "officer_task": "medium", "shooter": "low", "mapper": "medium",
+                "briefer": "low"},
     "officer": {"plan": True, "tasks": True, "max_rounds": 3},
     "permission_mode": "auto",
     "deny": [
@@ -552,7 +553,14 @@ def write_agent_files(r):
         "description": "Fresh code reviewer for one coordinator task: reads the task's knowledge file, "
                        "its changes.md and the diff, then writes review.md.",
         "prompt": role_prompt("reviewer"),
-        "model": r.cfg["models"]["reviewer"]}}
+        "model": r.cfg["models"]["reviewer"]},
+        "coord-briefer": {
+        "description": "Reads big content (long files, logs, script outputs, scraped data) on a smaller model and "
+                       "writes a short brief for the agent that called it.",
+        "prompt": role_prompt("briefer"),
+        "model": r.cfg["models"]["briefer"],
+        "effort": r.cfg["efforts"]["briefer"],
+        "tools": ["Read", "Grep", "Glob", "Bash", "Write"]}}
     write_json(r.brain / "agents.json", agents)
     hook = '"%s" "%s" _hook' % (sys.executable, ROOT / "bin" / "coord")
     settings = {"permissions": {"deny": list(r.cfg["deny"])},
@@ -743,8 +751,8 @@ def start_job(r, kind, tid):
         effort = cfg["efforts"]["officer"] if t["type"] == "plan" else cfg["efforts"].get("officer_task", "medium")
         cmd = [cfg["claude"], "-p"] + add_dirs(r, cwd) + ["--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
                "--settings", r.brain / "settings.json", "--output-format", "json", "-n", "%s:%s:officer" % (r.name, tid),
-               "--append-system-prompt", role_prompt("officer"), "--session-id", sid,
-               audit_prompt(r, data, t)]
+               "--append-system-prompt", role_prompt("officer"), "--agents", r.brain / "agents.json",
+               "--session-id", sid, audit_prompt(r, data, t)]
     else:
         role = role_of(t)
         cwd = prepare_worktree(r, data, t) if role == "builder" else r.project
@@ -768,7 +776,7 @@ def start_job(r, kind, tid):
         cmd = [cfg["claude"], "-p"] + add_dirs(r, cwd) + ["--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
                "--settings", r.brain / "settings.json", "--output-format", "json", "-n", "%s:%s" % (r.name, tid),
                "--append-system-prompt", role_prompt(role)]
-        if role == "builder":
+        if role != "shooter":
             cmd += ["--agents", r.brain / "agents.json"]
         cmd += (["--resume", sid] if resume else ["--session-id", sid]) + [prompt]
     out_path = logs / ("%s-%d.json" % (tid, n))
