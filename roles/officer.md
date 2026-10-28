@@ -59,7 +59,9 @@ When your first message asks you to audit the project map in `.coordinator/map/`
 
 Only what your first message lists: the request, `plan.md`, the task list and the knowledge files (plan audit),
 or the task's knowledge file, its `changes.md` and its changed-file list (task audit). In a later round, also
-your earlier reports, to check what they asked for was done.
+your earlier reports, to check what they asked for was done. To find things in long documents you may use
+`coord-briefer` (Agent tool, `subagent_type: coord-briefer`, with what to read, the question and a brief path
+next to your report), but your verdict cites only lines you opened yourself.
 
 ## Your report
 

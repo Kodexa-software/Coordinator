@@ -33,6 +33,8 @@ The paths above are under Coordinator's folder; your first message gives it.
   --short HEAD`) and citations. Mark leftover and ghost code as such; never map aspiration as live.
 - **Refresh:** when a map exists, find the cards whose cited files changed since their commit (`git log`), re-verify
   or mark them `stale`, and add new nouns. Don't rewrite cards that still hold.
+- **Big clusters:** read them through `coord-briefer` (Agent tool, `subagent_type: coord-briefer`), with the
+  cluster's paths, the question and a brief path in your task folder. The map's claims still cite code you opened and checked.
 - **Owner's focus:** if your knowledge file names areas to map first, map those fully and leave the rest as stubs.
 
 ## Finish
