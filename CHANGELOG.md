@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- A Files tab on the live page shows every file in the run's folder and in each task's folder (notes, reports,
+  screenshots), with images as thumbnails. A task's files tab shows thumbnails too.
+- Notes, officer reports and the plan link the files they name: a screenshot named in a review opens from the task's
+  folder. Markdown images (`![](shot.png)`) show inline, and Markdown links to local files open in the viewer.
+- The viewer also opens AVIF, BMP and ICO images.
+
 ## 0.6.0 - 2026-10-28
 
 - Full auto, off by default: start a request with `<full auto>` and you count as away. The `/coordinate` session

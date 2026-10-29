@@ -2300,22 +2300,25 @@ def read_conversation(path, offset, raw_cap=16 << 20, out_cap=256 << 10):
 
 
 VIEW_IMAGES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
-               ".webp": "image/webp", ".svg": "image/svg+xml"}
+               ".webp": "image/webp", ".avif": "image/avif", ".bmp": "image/bmp", ".ico": "image/x-icon",
+               ".svg": "image/svg+xml"}
 VIEW_CAPS = {"image": 25 << 20, "text": 2 << 20}
 
 
-def task_folder(r, tid, cap=300):
-    # Every file in a task's folder (its notes, screenshots and the like) as {name, size}, hidden files left out.
-    base, out = r.task_dir(tid), []
+def folder_files(base, skip=(), cap=300):
+    # Every file in a folder (notes, screenshots, reports and the like) as {name, size, mtime}, hidden files and the
+    # top-level names in `skip` left out.
+    out = []
     for d, dirs, names in os.walk(str(base)):
-        dirs[:] = sorted(x for x in dirs if not x.startswith("."))
-        for n in sorted(x for x in names if not x.startswith(".")):
+        top = Path(d) == base
+        dirs[:] = sorted(x for x in dirs if not x.startswith(".") and not (top and x in skip))
+        for n in sorted(x for x in names if not x.startswith(".") and not (top and x in skip)):
             p = Path(d) / n
             try:
-                size = p.lstat().st_size
+                st = p.lstat()
             except OSError:
                 continue
-            out.append({"name": p.relative_to(base).as_posix(), "size": size})
+            out.append({"name": p.relative_to(base).as_posix(), "size": st.st_size, "mtime": int(st.st_mtime * 1000)})
             if len(out) >= cap:
                 return out
     return out
@@ -2323,18 +2326,20 @@ def task_folder(r, tid, cap=300):
 
 def view_path(r, raw, tid="", folder=False):
     # A file the live page may show: under the project, the run's worktrees or the run folder once symlinks are
-    # resolved. No "~", no "..". A relative path is looked up in the task's folder (`folder`), or in its worktree
-    # and then the project. None when refused or missing.
+    # resolved. No "~", no "..". A relative path is looked up in the task's folder, or the run folder without a task
+    # (`folder`); otherwise in the task's worktree, the project, then the task's (or run's) folder, so a note that
+    # names its own screenshot opens it. None when refused or missing.
     if not raw or len(raw) > 4096 or "\0" in raw or raw.startswith("~") or ".." in Path(raw).parts \
             or (tid and not re.fullmatch(r"[A-Za-z0-9_-]+", tid)):
         return None
     p = Path(raw)
+    own = r.task_dir(tid) if tid else r.dir
     if folder:
-        if not tid or p.is_absolute():
+        if p.is_absolute():
             return None
-        cands = [r.task_dir(tid) / p]
+        cands = [own / p]
     else:
-        cands = [p] if p.is_absolute() else ([r.wt(tid) / p] if tid else []) + [r.project / p]
+        cands = [p] if p.is_absolute() else ([r.wt(tid) / p] if tid else []) + [r.project / p, own / p]
     roots = [x.resolve() for x in (r.project, r.brain / "wt", r.dir)]
     for c in cands:
         try:
@@ -2360,10 +2365,12 @@ def view_state(r):
     for t in data["tasks"]:
         kd = r.task_dir(t["id"])
         t["files_present"] = [f for f in TASK_FILES if nonempty(kd / f)] + sorted(p.name for p in kd.glob("audit-*.md"))
-        t["folder"] = task_folder(r, t["id"])
+        t["folder"] = folder_files(kd)
         t["sessions"] = task_sessions(t)
     data["plan_present"] = nonempty(r.dir / "plan.md")
     data["plan_audits"] = sorted(p.name for p in r.dir.glob("plan-audit-*.md"))
+    # The run folder's own files: the plan, its audits, follow-up requests and what officers left next to them
+    data["folder"] = folder_files(r.dir, skip=("tasks", "tasks.json"))
     data["scheduler_alive"] = alive(st.get("scheduler_pid"))
     data["agents"] = st.get("agents") or {}
     data["prs"] = pull_requests(r, data)
@@ -2450,7 +2457,8 @@ def cmd_viewer(a):
                 self.send_response(200)
                 self.send_header("Content-Type", VIEW_IMAGES.get(p.suffix.lower(), "text/plain; charset=utf-8"))
                 self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
+                # A thumbnail names the file's mtime (`v`), so a changed file gets a new URL and the rest stay cached
+                self.send_header("Cache-Control", "private, max-age=3600" if "v" in q and kind == "image" else "no-store")
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
                 self.end_headers()
