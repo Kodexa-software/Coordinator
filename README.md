@@ -95,7 +95,7 @@ write. Nothing leaves your machine: screenshots and other artifacts stay in the 
 A local page on `127.0.0.1` shows the tasks moving from queued to done. Read each agent's conversation live, open
 any file or image, approve the plan with an answer per question, and see everything waiting on you in one list.
 The Files tab lists every file in the run's folder and each task's folder, with image previews; anything the viewer
-can't show opens in a new tab or in Finder.
+can't show opens in a new tab or in Finder (Explorer on Windows).
 The Full auto switch in its top bar hands every decision to `/coordinate` while you're away.
 
 ## Full auto
