@@ -377,6 +377,7 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
 .f-size{flex:none;color:var(--co-muted);font-size:0.75rem;font-variant-numeric:tabular-nums}
 /* Images as thumbnails, ahead of the other files */
 .f-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin:0 0 12px;padding:0;list-style:none}
+.f-tile{position:relative}
 .f-thumb{display:grid;gap:7px;width:100%;padding:6px 6px 8px;border:1px solid var(--co-line);border-radius:var(--co-radius-md);background:var(--co-surface);
   color:var(--co-ink);text-align:left;cursor:pointer;
   transition:border-color var(--co-dur-quick) var(--co-ease-arrive),background-color var(--co-dur-quick) var(--co-ease-arrive)}
@@ -390,6 +391,20 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
 .f-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px;font-size:var(--co-text-sm);font-weight:var(--co-weight-strong)}
 .f-path{color:var(--co-muted);font:500 var(--co-text-xs) var(--co-font-mono);overflow-wrap:anywhere}
 .f-group .f-list{margin:0 -10px}
+/* Each file also opens in its own tab or shows in its folder */
+.f-row{display:flex;align-items:center;gap:2px}
+.f-row .f-item{flex:1;min-width:0}
+a.f-item{text-decoration:none}
+.f-acts{flex:none;display:flex;gap:2px}
+.f-act{display:inline-grid;place-items:center;width:30px;height:30px;padding:0;border:0;border-radius:var(--co-radius-sm);background:none;
+  color:var(--co-muted);cursor:pointer;transition:background-color var(--co-dur-quick) var(--co-ease-arrive),color var(--co-dur-quick) var(--co-ease-arrive)}
+.f-act:hover{background:var(--co-sunken);color:var(--co-ink)}
+.f-tile .f-acts{position:absolute;top:10px;right:10px;padding:2px;border-radius:var(--co-radius-md);background:var(--co-surface);box-shadow:var(--co-shadow-1)}
+.f-tile .f-act{width:26px;height:26px}
+@media (hover:hover){
+  .f-tile .f-acts{opacity:0;transition:opacity var(--co-dur-quick) var(--co-ease-arrive)}
+  .f-tile:hover .f-acts,.f-tile:focus-within .f-acts{opacity:1}
+}
 /* Images a note embeds */
 .md img.md-img{display:block;max-width:100%;height:auto;margin:8px 0 14px;border:1px solid var(--co-line);border-radius:var(--co-radius-md)}
 
@@ -420,6 +435,7 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
 .v-none{display:grid;gap:4px;justify-items:center;padding:48px 16px;text-align:center}
 .v-none b{font-size:var(--co-text-base);font-weight:var(--co-weight-strong)}
 .v-none span{color:var(--co-muted);font-size:var(--co-text-xs)}
+.v-acts{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:14px}
 
 @media (max-width:1100px){.board{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:640px){
@@ -526,6 +542,10 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
   <div class="v-panel">
     <div class="v-head">
       <div class="grow"><h2 id="v-title"></h2><div class="v-meta" id="v-meta"></div></div>
+      <a class="btn icon" id="v-open" target="_blank" rel="noopener" title="Open in a new tab" aria-label="Open in a new tab" hidden>
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M9 3h4v4M13 3L7.5 8.5M11.5 9.5V13H3V4.5h3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+      <button class="btn icon" id="v-reveal" hidden>
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 4.5a1 1 0 0 1 1-1h3L8 5h4.5a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></button>
       <button class="btn icon" id="v-close" aria-label="Close the file">
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
     </div>
@@ -992,16 +1012,29 @@ async function loadConv(){
   finally{ c.busy = false; }
 }
 
-// A folder's files, each opening in the viewer: images as thumbnails first, then the rest. `task` is "" for the run folder.
+// A folder's files, every one: images as thumbnails first, then the rest. A click opens the viewer, or the file's own
+// tab for what the browser plays itself (video, audio, PDF, a page). Each also opens in a new tab or shows in its
+// folder. `task` is "" for the run folder.
 function fmtSize(n){ return n < 1024 ? n+" B" : n < 1048576 ? Math.round(n/1024)+" KB" : (n/1048576).toFixed(1)+" MB"; }
-const IMG = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i;
+const IMG = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i, OWN_TAB = /\.(mp4|m4v|webm|mov|ogv|mp3|m4a|wav|ogg|oga|flac|aac|opus|pdf|html?)$/i;
 function viewURL(o){ return "/api/view?" + new URLSearchParams(Object.entries(o).filter((x)=>x[1])); }
+// A file under the run folder, raw, by its path there
+function fileURL(rel){ return "/files/" + rel.split("/").map(encodeURIComponent).join("/"); }
+const ICON_TAB = $("#v-open svg").outerHTML, ICON_DIR = $("#v-reveal svg").outerHTML;
+function revealLabel(){ return state && state.platform==="darwin" ? "Show in Finder" : "Show in its folder"; }
+function fileActs(url, reveal, name){
+  return `<span class="f-acts"><a class="f-act" href="${esc(url)}" target="_blank" rel="noopener" title="Open in a new tab" aria-label="Open ${esc(name)} in a new tab">${ICON_TAB}</a>` +
+    `<button class="f-act" ${reveal} title="${revealLabel()}" aria-label="${revealLabel()}: ${esc(name)}">${ICON_DIR}</button></span>`;
+}
 function filesHTML(files, task){
   const imgs = files.filter((f)=>IMG.test(f.name)), rest = files.filter((f)=>!IMG.test(f.name)), of = `data-of="${esc(task)}"`;
-  return (imgs.length ? `<ul class="f-grid" aria-label="Images">` + imgs.map((f)=>`<li><button class="f-thumb" data-view="${esc(f.name)}" ${of} title="${esc(f.name)} · ${fmtSize(f.size)}">` +
-      `<img src="${esc(viewURL({path:f.name, task, in:"folder", v:f.mtime}))}" alt="" loading="lazy" decoding="async"><span class="f-name">${esc(f.name)}</span></button></li>`).join("") + "</ul>" : "") +
+  const url = (f) => fileURL((task ? `tasks/${task}/` : "") + f.name), acts = (f) => fileActs(url(f), `data-reveal="${esc(f.name)}" ${of} data-in="folder"`, f.name);
+  return (imgs.length ? `<ul class="f-grid" aria-label="Images">` + imgs.map((f)=>`<li class="f-tile"><button class="f-thumb" data-view="${esc(f.name)}" ${of} title="${esc(f.name)} · ${fmtSize(f.size)}">` +
+      `<img src="${esc(url(f)+"?v="+f.mtime)}" alt="" loading="lazy" decoding="async"><span class="f-name">${esc(f.name)}</span></button>${acts(f)}</li>`).join("") + "</ul>" : "") +
     (rest.length ? `<ul class="f-list" aria-label="Files">` + rest.map((f)=>{ const ext = (f.name.match(/\.([A-Za-z0-9]{1,5})$/)||[,"file"])[1];
-      return `<li><button class="f-item" data-view="${esc(f.name)}" ${of}><span class="f-ext" aria-hidden="true">${esc(ext)}</span><span class="f-name">${esc(f.name)}</span><span class="f-size">${fmtSize(f.size)}</span></button></li>`; }).join("") + "</ul>" : "");
+      const inner = `<span class="f-ext" aria-hidden="true">${esc(ext)}</span><span class="f-name">${esc(f.name)}</span><span class="f-size">${fmtSize(f.size)}</span>`;
+      return `<li class="f-row">` + (OWN_TAB.test(f.name) ? `<a class="f-item" href="${esc(url(f))}" target="_blank" rel="noopener">${inner}</a>`
+        : `<button class="f-item" data-view="${esc(f.name)}" ${of}>${inner}</button>`) + acts(f) + "</li>"; }).join("") + "</ul>" : "");
 }
 function renderFolder(t){
   const el = $("#f-list"); if(!el || !t) return;
@@ -1061,13 +1094,13 @@ async function markPaths(root, task, dir, codes){
 // The viewer: one file at a time over the page, read-only, served by this machine's own coordinator.
 let viewSeq = 0, viewOpener = null;
 const BEHIND = ["header.top","main","#drawer"];
-function viewNone(title, detail){ return `<div class="v-none"><b>${esc(title)}</b><span>${esc(detail)}</span></div>`; }
+function viewNone(title, detail, acts){ return `<div class="v-none"><b>${esc(title)}</b><span>${esc(detail)}</span>${acts||""}</div>`; }
 // `o`: {path, task, in}. Without a task, the open drawer's; `in: "folder"` looks only in the task's (or run's) folder.
 async function openViewer(o){
   const v = $("#viewer"), body = $("#v-body"), seq = ++viewSeq, path = o.path, task = o.task ?? (drawer || "");
   if(!v.classList.contains("open")){ viewOpener = document.activeElement; BEHIND.forEach((s)=>$(s).inert = true); v.classList.add("open"); }
   const name = path.split("/").filter(Boolean).pop() || path;
-  $("#v-title").textContent = name; $("#v-meta").textContent = path;
+  $("#v-title").textContent = name; $("#v-meta").textContent = path; $("#v-open").hidden = $("#v-reveal").hidden = true;
   body.className = "v-body"; body.innerHTML = '<p class="empty">Opening…</p>'; body.scrollTop = 0;
   $("#v-close").focus({preventScroll:true});
   const q = viewURL({path, task, in:o.in});
@@ -1077,7 +1110,12 @@ async function openViewer(o){
   const show = (html, cls) => { body.className = "v-body"+(cls?" "+cls:""); body.innerHTML = html; body.scrollTop = 0; replay(body, "fade"); };
   if(!m) return show(viewNone("Can't open this file", "It isn't in this run's folders, or it's no longer there."));
   $("#v-title").textContent = m.name; $("#v-meta").textContent = `${m.path} · ${fmtSize(m.size)}`;
-  if(!m.ok) return show(viewNone("Can't preview this file", `${m.name} · ${fmtSize(m.size)}${m.kind==="binary"?"":" · too large to show"}`));
+  // Files under the run folder also open in their own tab; any file shows in its folder.
+  const rel = state && state.dir && m.path.startsWith(state.dir+"/") ? fileURL(m.path.slice(state.dir.length+1)) : "", rv = $("#v-reveal");
+  $("#v-open").hidden = !rel; if(rel) $("#v-open").href = rel;
+  rv.hidden = false; rv.dataset.reveal = m.path; rv.dataset.of = ""; rv.title = revealLabel(); rv.setAttribute("aria-label", revealLabel());
+  if(!m.ok) return show(viewNone("Can't preview this file", `${m.name} · ${fmtSize(m.size)}${m.kind==="binary"?"":" · too large to show"}`,
+    `<div class="v-acts">${rel?`<a class="btn" href="${esc(rel)}" target="_blank" rel="noopener">Open in a new tab</a>`:""}<button class="btn" data-reveal="${esc(m.path)}" data-of="">${revealLabel()}</button></div>`));
   if(m.kind==="image"){
     show(`<img class="v-img" alt="${esc(m.name)}">`, "img");
     const img = body.querySelector("img");
@@ -1140,10 +1178,11 @@ document.addEventListener("click", async (e)=>{
   const menu = $("#prs").getAttribute("aria-expanded")==="true", focus = document.activeElement;
   if(menu && !e.target.closest("#prs-wrap")) prMenu(false, !focus || focus===document.body);
   if(e.target.closest("#prs")) return prMenu(!menu);
-  const b = e.target.closest("[data-path],[data-view],#v-close,#v-back,#w-jump,[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],[data-settle],[data-unsettle],#d-close,#pause,#resume,#auto");
+  const b = e.target.closest("[data-reveal],[data-path],[data-view],#v-close,#v-back,#w-jump,[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],[data-settle],[data-unsettle],#d-close,#pause,#resume,#auto");
   if(!b) return;
   if(b.id==="auto"){ b.disabled = true; try{ await api("/api/auto",{on:b.getAttribute("aria-checked")!=="true"}); } finally { b.disabled = false; } return; }
   if(b.id==="v-close" || b.id==="v-back") return closeViewer();
+  if(b.dataset.reveal) return api("/api/reveal",{path:b.dataset.reveal, task:b.dataset.of||"", in:b.dataset.in||""});
   if(b.dataset.path) return openViewer({path:b.dataset.path, task:b.dataset.of, in:b.dataset.in});
   if(b.dataset.view) return openViewer({path:b.dataset.view, task:b.dataset.of, in:"folder"});
   if(b.id==="pause") return api("/api/pause"); if(b.id==="resume") return api("/api/resume");
