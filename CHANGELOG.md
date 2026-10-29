@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0 - 2026-10-29
+
+- The pull request reads like a senior engineer wrote it. Once every task has merged, a new writer agent (Sonnet)
+  reads the plan, each task's notes and the diff, and writes the description: what the change does and why, the
+  changes by area, the decisions a reviewer might question, how to test it, and real risks. No task ids, tokens,
+  times or process.
+- While the run works, the description is the plan's goal and a checklist of what has merged. The quoted request,
+  the token table and the full plan are gone. Steps left for you stay, under "Left to do".
+- If the writer can't finish, its task is skipped and the short description stays; the run still finishes.
+
 ## 0.8.0 - 2026-10-29
 
 - Every agent works like a senior engineer: it understands the code before changing or judging it, follows the

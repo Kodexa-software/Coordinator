@@ -43,7 +43,7 @@ AGENT_CMDS = ("task", "audit", "_shoot", "_hook", "_scheduler", "_viewer", "stat
 OWNER_ONLY = "Only the owner can do this. Ask with `coord task ask`."
 TASK_FILES = ("knowledge.md", "changes.md", "review.md", "resume.md")
 ROLE_NAMES = {"planner": "planner", "builder": "builder", "officer": "hallucination officer", "shooter": "screenshot taker",
-              "mapper": "mapper"}
+              "mapper": "mapper", "writer": "pull request writer"}
 
 DEFAULTS = {
     "base_branch": "",
@@ -54,10 +54,10 @@ DEFAULTS = {
     "dev": {"command": "", "cwd": ".", "ready_path": "/"},
     "shots": {"widths": [1280, 390], "themes": ["light", "dark"], "height": 900, "wait_ms": 1500},
     "models": {"planner": "opus", "builder": "opus", "reviewer": "opus", "officer": "opus", "shooter": "haiku",
-               "mapper": "opus", "briefer": "sonnet"},
+               "mapper": "opus", "briefer": "sonnet", "writer": "sonnet"},
     "efforts": {"planner": "high", "builder": "high", "reviewer": "medium", "officer": "high",
                 "officer_task": "medium", "shooter": "low", "mapper": "medium",
-                "briefer": "low"},
+                "briefer": "low", "writer": "medium"},
     "officer": {"plan": True, "tasks": True, "max_rounds": 3},
     "permission_mode": "auto",
     "deny": [
@@ -603,7 +603,7 @@ def other_repo_env():
 # ---------------------------------------------------------------- agents
 
 def role_of(t):
-    return {"plan": "planner", "shots": "shooter", "map": "mapper"}.get(t["type"], "builder")
+    return {"plan": "planner", "shots": "shooter", "map": "mapper", "pr": "writer"}.get(t["type"], "builder")
 
 
 def role_prompt(role):
@@ -733,6 +733,10 @@ def first_prompt(r, data, t, role, cwd):
                                                if t.get("tests") else "OFF - don't add, change or delete any test file. If an existing test breaks because of your change, ask the owner with `coord task ask` instead of editing it.")]
     elif role == "shooter":
         lines += ["Plan: %s" % (r.dir / "plan.md")]
+    elif role == "writer":
+        lines += ["Plan: %s" % (r.dir / "plan.md"),
+                  "The change: run `git diff %s...%s` in %s." % (data["base"], data["branch"], r.project),
+                  "Write the description to: %s" % (r.dir / "pr.md")]
     elif role == "mapper":
         lines += ["Project: %s. The map goes in %s." % (r.project, r.project / STORE / "map"),
                   "A map already exists there; refresh it." if (r.project / STORE / "map" / "AGENTS.md").exists()
@@ -912,6 +916,8 @@ def finish_job(r, job):
                 t["status"] = "queue"
                 t["resume"] = True
                 t["resume_msg"] = "Your session ended before the task was done. Check where you are, then finish the task."
+            elif t["type"] == "pr":  # the pull request keeps its short description; the run still finishes
+                t["status"] = "skipped"
             else:
                 t["status"] = "waiting_on_you"
                 t["question_kind"] = "stalled"
@@ -1013,45 +1019,62 @@ def plan_title(r, data):
     return data["name"]
 
 
-TASK_WORDS = {"queue": "○ queued", "in_progress": "● in progress", "review": "● in review", "audit": "● in audit",
-              "waiting_on_you": "**waiting on you**", "done": "✓ done", "skipped": "– skipped"}
+def plan_section(r, heading):
+    plan = r.dir / "plan.md"
+    m = re.search(r"^## %s[ \t]*\n(.*?)(?=^## |\Z)" % re.escape(heading), plan.read_text(), re.M | re.S) if plan.exists() else None
+    return m.group(1).strip() if m else ""
+
+
+def merged_ids(data):
+    return sorted(t["id"] for t in data["tasks"] if t["type"] in WORK and t.get("merged"))
+
+
+def queue_writer(r):
+    # Once every task has merged, a writer describes the change for its reviewers
+    data = r.load()
+    ids = merged_ids(data)
+    if data.get("mode") != "build" or data["status"] == "paused" or not data.get("pr_url") or not ids \
+            or data.get("described") == ids or any(t["status"] in OPEN + ("waiting_on_you",) for t in data["tasks"]) \
+            or any(t["type"] in WORK and t["status"] == "done" and not t.get("merged") for t in data["tasks"]):
+        return
+    with r.edit() as d:
+        tid = next_id(d, "W")
+        d["tasks"].append(new_task(tid, "Write the pull request description", "pr", size="S"))
+        d["described"] = ids
+        work = [t for t in d["tasks"] if t["type"] in WORK and not t.get("parent")]
+    (r.dir / "pr.md").unlink(missing_ok=True)
+    r.task_dir(tid).mkdir(parents=True, exist_ok=True)
+    (r.task_dir(tid) / "knowledge.md").write_text(
+        "# %s - Write the pull request description\n\n## The owner's words\n\n%s\n\n## Tasks\n\n%s\n" % (
+            tid, owner_words(data), "\n".join("- %s: %s%s - %s" % (t["id"], t["title"], " (skipped)" if t["status"] == "skipped"
+                                                               else "", r.task_dir(t["id"]) / "changes.md") for t in work)))
+    r.log("queued %s to write the pull request description" % tid)
 
 
 def pr_body(r, data):
-    work = [t for t in data["tasks"] if t["type"] in WORK]
-    counted = [t for t in work if not t.get("parent") and t["status"] != "skipped"]
-    stamp = dt.datetime.now().astimezone().strftime("%d %b %Y, %H:%M %Z")
-    out = ["**Status:** %s%s · %d of %d tasks merged · updated %s" % (
-        data["status"].replace("_", " "), " · full auto" if data.get("full_auto") else "",
-        sum(1 for t in counted if t.get("merged")), len(counted), stamp),
-        "", "## Request", ""]
-    out += ["> " + line if line else ">" for line in owner_words(data).splitlines()] + [""]
-    if (data.get("design") or {}).get("choice"):
-        out += ["**Design language:** %s" % design_line(data), ""]
-    out += ["## Tasks", "", "| id | task | status | time | tokens |", "|---|---|---|---|---|"]
-    for t in work:
-        state = "✓ merged" if t.get("merged") else TASK_WORDS.get(t["status"], t["status"].replace("_", " "))
-        out.append("| %s | %s | %s | %s | %s |" % (t["id"], t["title"].replace("|", "/"), state,
-                                                  human_minutes(t.get("minutes")), human_tokens(t.get("tokens"))))
-    out.append("")
+    # The writer's description once every task has merged; until then the goal and what is merged so far
+    written = r.dir / "pr.md"
+    if data["status"] == "finished" and data.get("described") == merged_ids(data) and nonempty(written):
+        out = [written.read_text().strip(), ""]
+    else:
+        tasks = [t for t in data["tasks"] if t["type"] in WORK and not t.get("parent") and t["status"] != "skipped"]
+        goal = plan_section(r, "Goal")
+        out = ([goal, ""] if goal else []) + ["Work in progress: %d of %d merged." % (
+            sum(1 for t in tasks if t.get("merged")), len(tasks)), ""]
+        out += ["- [%s] %s" % ("x" if t.get("merged") else " ", t["title"]) for t in tasks] + [""]
     # The run's task files go when it ends, so what is left for the owner stays here too
     todos = [x for x in data.get("todos") or [] if not x.get("done")]
     external = sorted({f for t in data["tasks"] if t.get("status") == "done" for f in (t.get("external") or [])})
     if todos or external:
-        out += ["## Left for you", ""]
-        out += ["- %s%s" % ("%s: " % x["task"] if x.get("task") else "", x["text"]) for x in todos]
-        out += ["- Commit `%s`: updated outside the repo, so coord didn't commit it" % f for f in external] + [""]
-    plan = r.dir / "plan.md"
-    if nonempty(plan):
-        out += ["## Plan", "", "<details><summary>%s</summary>" % plan_title(r, data), "", plan.read_text().strip(), "",
-                "</details>", ""]
+        out += ["## Left to do", ""]
+        out += ["- %s" % x["text"] for x in todos]
+        out += ["- Commit `%s` (changed outside this repository)" % f for f in external] + [""]
     followups = data.get("followups") or []
     if followups:
-        out += ["## Not in this run", ""]
-        out += ["- **%s**: follow-up run `%s` (%s)" % (Path(f["repo"]).name, f.get("run") or f.get("name", ""),
-                                                      f.get("status", "pending")) for f in followups] + [""]
-    out.append("<sub>Opened by [Coordinator](https://github.com/Kodexa-software/Coordinator) and updated as the run works.</sub>")
-    return "\n".join(out) + "\n"
+        out += ["## Related changes in other repositories", ""]
+        out += ["- **%s**: `%s` (%s)" % (Path(f["repo"]).name, f.get("run") or f.get("name", ""), f.get("status", "pending"))
+                for f in followups] + [""]
+    return "\n".join(out).strip() + "\n"
 
 
 def push_branch(r, branch):
@@ -1133,7 +1156,7 @@ def next_jobs(r, data, jobs):
             if t["type"] == "plan" and t["status"] == "queue" and deps_met(t, by):
                 out.append(("work", t["id"]))
                 break
-    out += [("work", t["id"]) for t in tasks if t["type"] in ("shots", "map") and t["status"] == "queue" and t["id"] not in busy]
+    out += [("work", t["id"]) for t in tasks if t["type"] in ("shots", "map", "pr") and t["status"] == "queue" and t["id"] not in busy]
     if data.get("plan_approved") and data.get("mode") == "build":
         running = [by[x] for x in busy if x in by and by[x]["type"] in WORK]
         slots = max(1, int(r.cfg["max_parallel"])) - len(running)
@@ -1197,6 +1220,10 @@ def cmd_scheduler(a):
                             tt = find(d, t["id"])
                             tt.update(status="waiting_on_you", question_kind="stalled",
                                       question="Merging %s into the run branch failed: %s" % (t["id"], e))
+            try:
+                queue_writer(r)
+            except Exception as e:
+                r.log("queueing the pull request writer failed: %r" % e)
             data = r.load()
             for kind, tid in next_jobs(r, data, jobs):
                 key = "%s:%s" % (kind, tid)
@@ -2079,6 +2106,8 @@ def cmd_task(a):
             elif act == "done":
                 if t["type"] in WORK and not nonempty(r.task_dir(tid) / "changes.md"):
                     raise Fail("write %s first" % (r.task_dir(tid) / "changes.md"))
+                if t["type"] == "pr" and not nonempty(r.dir / "pr.md"):
+                    raise Fail("write %s first" % (r.dir / "pr.md"))
                 if t["type"] == "map" and not nonempty(r.project / STORE / "map" / "AGENTS.md"):
                     raise Fail("write %s first" % (r.project / STORE / "map" / "AGENTS.md"))
                 if t["type"] == "plan":
