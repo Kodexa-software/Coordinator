@@ -58,8 +58,10 @@ Decide from the request and what you know of the repo, without reading code for 
 ("direct: one file and a changelog line, done here with a reviewer"), then go.
 
 - **direct**: one coherent change an engineer finishes in one sitting, touching a few files: a bug fix, a config
-  or copy change, an endpoint, a component tweak, a changelog. The default for small and medium single changes
-  while the owner is here. Follow "Direct" below.
+  or copy change, an endpoint, a component tweak, a changelog. The default for small single changes while the
+  owner is here: it costs what a plain session costs. Follow "Direct" below.
+- A change across several areas (site, app and API; several packages) is a **run**, even when it reads as one
+  feature: measured on such a feature, a planned run produced the best diff, with no unrequested tests.
 - **quick**: the same size of change, when the owner is away (full auto), asks for it in the background, or
   wants to keep this conversation free. One background builder, no planner: `coord start --quick` (below).
 - **run**: two or more parts that can be built side by side, a change big enough to need a plan the owner
@@ -78,13 +80,16 @@ this skill's base directory hold the full rules; follow them, skipping the parts
    words leave a choice open, follow the code's existing patterns.
 3. Run the project's fast checks for what you touched (typecheck, lint, the tests next to the changed files;
    `.coordinator/config.json` names them as `check` and `gate` when it exists).
-4. Spawn one fresh reviewer with the Agent tool (`subagent_type: general-purpose`, model `opus`), with this
-   prompt filled in and nothing added: "Follow the role in `<absolute path of ../../roles/reviewer.md>`. The
-   owner's words, exactly: <<<the request>>>. Review the uncommitted change in `<repo>` (`git -C <repo> diff`
-   plus new files from `git -C <repo> status --short`). Write nothing; reply with the review." Fix every
-   must-fix and should-fix finding that is right, and re-run the checks.
+4. Only when the change touches a risky area (authentication, permissions, money or stock, data migrations,
+   concurrency, security) or the owner asks for a review: spawn one fresh reviewer with the Agent tool
+   (`subagent_type: general-purpose`, model `opus`), with this prompt filled in and nothing added: "Follow the
+   role in `<absolute path of ../../roles/reviewer.md>`. The owner's words, exactly: <<<the request>>>. Review
+   the uncommitted change in `<repo>` (`git -C <repo> diff` plus new files from `git -C <repo> status
+   --short`). Write nothing; reply with the review." Fix every must-fix and should-fix finding that is right,
+   and re-run the checks. Measured on small changes, the extra review cost half again as much and bought nothing
+   a blind judge could see, so it is kept for the areas where a missed bug is expensive.
 5. Commit, branch or push only as the project's instructions say. Report in at most 5 lines: what changed, the
-   files, the checks, the reviewer's findings and what you did with them.
+   files, the checks, and the review's findings when there was one.
 
 ## Start a run
 

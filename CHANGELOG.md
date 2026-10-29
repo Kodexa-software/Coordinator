@@ -5,9 +5,10 @@
 Reworked after two measured assessments: Coordinator's diffs ranked first, but it took 3 to 5 times as long and
 2 to 3 times the cost of a plain session on small and medium work, and stalled for hours on one question.
 
-- Three modes, picked by `/coordinate` and named in one line: **direct** (a single change built in your session,
-  then checked by a fresh reviewer), **quick** (`coord start --quick`: one background builder, no planner) and
-  **run** (the planned team).
+- Three modes, picked by `/coordinate` and named in one line: **direct** (a small single change built in your
+  session under the scope rules, with a fresh reviewer only in risky areas), **quick** (`coord start --quick`: one
+  background builder, no planner) and **run** (the planned team, also for one feature that spans several
+  areas).
 - The officer checks a plan once, and only in full auto or for plans of more than three tasks, on Sonnet. A
   must-fix names the sentence, file or task it breaks; `notes` approves with should-fix items. It no longer audits
   each task: the reviewer checks that everything in the diff traces to your words.

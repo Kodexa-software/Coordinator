@@ -18,8 +18,8 @@
 Coordinator gets one `/coordinate` request done with the least ceremony that still guards the result. It picks
 one of three modes and says which:
 
-- **direct**: a small or medium single change is built in your own session, then checked by a fresh reviewer
-  against your exact words. About the time of a plain prompt, with a second pair of eyes.
+- **direct**: a small single change is built in your own session under Coordinator's scope rules, at the cost of
+  a plain prompt; a fresh reviewer checks it when it touches a risky area (auth, money, migrations, security).
 - **quick**: the same change in the background: one builder in its own worktree, reviewed, merged and pushed, while
   you keep working.
 - **run**: work with parts that can be built side by side. A planner splits it, you approve the plan once, and
