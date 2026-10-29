@@ -945,7 +945,7 @@ def start_job(r, kind, tid):
         effort = cfg["efforts"]["officer"] if t["type"] == "plan" else cfg["efforts"].get("officer_task", "medium")
         cmd = [cfg["claude"], "-p"] + add_dirs(r, cwd) + ["--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
                "--settings", r.brain / "settings.json", "--output-format", "json", "-n", "%s:%s:officer" % (r.name, tid),
-               "--append-system-prompt", role_prompt("officer"), "--agents", r.brain / "agents.json",
+               "--append-system-prompt", role_prompt("officer"), "--agents", (r.brain / "agents.json").read_text(),
                "--session-id", sid, audit_prompt(r, data, t)]
     else:
         role = role_of(t)
@@ -971,7 +971,7 @@ def start_job(r, kind, tid):
                "--settings", r.brain / "settings.json", "--output-format", "json", "-n", "%s:%s" % (r.name, tid),
                "--append-system-prompt", role_prompt(role)]
         if role != "shooter":
-            cmd += ["--agents", r.brain / "agents.json"]
+            cmd += ["--agents", (r.brain / "agents.json").read_text()]
         cmd += (["--resume", sid] if resume else ["--session-id", sid]) + [prompt]
     out_path = logs / ("%s-%d.json" % (tid, n))
     out = open(out_path, "w")
