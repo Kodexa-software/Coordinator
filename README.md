@@ -7,7 +7,7 @@
 <p align="center"><a href="https://coordinator.kodexa.workers.dev"><strong>coordinator.kodexa.workers.dev</strong></a></p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.10.3-6a44da?style=flat-square">
+  <img alt="version" src="https://img.shields.io/badge/version-0.11.0-6a44da?style=flat-square">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-151520?style=flat-square">
   <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-151520?style=flat-square">
   <img alt="scheduling" src="https://img.shields.io/badge/scheduling-zero%20tokens-6a44da?style=flat-square">
@@ -15,9 +15,18 @@
 
 ---
 
-Coordinator turns one `/coordinate` request into a small team of Claude Code agents working in the background. A
-planner splits the work, a **hallucination officer** checks the plan against your exact words, you approve it once,
-and builders work **in parallel**, each in its own git worktree, reviewed and checked again before it is merged.
+Coordinator gets one `/coordinate` request done with the least ceremony that still guards the result. It picks
+one of three modes and says which:
+
+- **direct**: a small or medium single change is built in your own session, then checked by a fresh reviewer
+  against your exact words. About the time of a plain prompt, with a second pair of eyes.
+- **quick**: the same change in the background: one builder in its own worktree, reviewed, merged and pushed, while
+  you keep working.
+- **run**: work with parts that can be built side by side. A planner splits it, you approve the plan once, and
+  builders work **in parallel**, each in its own git worktree and reviewed before it is merged. In full auto, or
+  for plans of more than three tasks, a **hallucination officer** checks the plan against your words first.
+
+You can name the mode yourself: `/coordinate quick <request>`.
 
 The conductor never plays an instrument: scheduling, merging, the gate and the live page are plain code and cost no
 tokens. This repo is the skill; the [website](https://coordinator.kodexa.workers.dev/docs/) has the docs.
@@ -74,12 +83,13 @@ flowchart LR
 ```
 
 - **Plan.** The planner reads only the code your request touches and gives each task every file path it needs.
-- **Audit.** The officer sends the plan back until it matches your words: nothing invented, nothing missed.
+- **Audit.** In full auto or for big plans, the officer checks the plan once against your words: nothing invented,
+  nothing missed.
 - **Approve.** Your one stop. Asks that belong to another repo start follow-up runs there, so none is dropped.
 - **Build.** Independent tasks run at once, each with its own reviewer. The draft pull request opens as work
   starts and tracks every task.
-- **Merge.** The officer checks each task, then the scheduler commits, merges, runs your gate and pushes. Nothing
-  reaches your base branch for you.
+- **Merge.** The scheduler commits, merges, runs your gate once (and once more before blaming the code), keeps
+  the run branch up to date with your base branch and pushes. Nothing reaches your base branch for you.
 - **Describe.** Once every task has merged, a writer describes the change in the pull request the way a senior
   engineer would: one short paragraph, one to three lines, on what and why.
 
@@ -123,7 +133,10 @@ Keep the `/coordinate` session open: it is the one deciding.
 | `/coordinate approve` | Approve the plan (or on the live page, per question); building starts |
 | `/coordinate answer T3 <text>` | Answer an agent's question |
 | `/coordinate tell T3 <text>` | Send a note to a running agent |
-| `/coordinate add <text>` | Change the plan or add work; it goes back through the officer and you |
+| `/coordinate say <text>` | One message: it answers a question, reaches the task it names, or adds work |
+| `/coordinate add <text>` | Add work; approved work keeps building while the planner fits it in |
+| `/coordinate stats` | Time, cost and stages of the latest run, also after it ended |
+| `/coordinate restart` | A new scheduler that adopts the running agents (after an update) |
 | `/coordinate pause` / `resume` | Agents write an exact next step and stop / pick up where they stopped |
 | `/coordinate run` | Build a plan-only run, today or weeks later |
 | `/coordinate shots [note]` | Before/after screenshots as one PNG, saved in the shots task's folder |

@@ -24,6 +24,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -41,6 +42,7 @@ if WINDOWS:
     kernel32.OpenProcess.restype = ctypes.c_void_p
     kernel32.OpenProcess.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong)
     kernel32.GetExitCodeProcess.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+    kernel32.GetProcessTimes.argtypes = (ctypes.c_void_p,) + (ctypes.POINTER(ctypes.c_ulonglong),) * 4
     kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
 else:
     import fcntl
@@ -51,7 +53,7 @@ STORE = ".coordinator"
 WORK = ("build", "merge")
 OPEN = ("queue", "in_progress", "review", "audit")
 WAIT_STATES = ("waiting_on_you", "finished", "planned", "paused")
-AGENT_CMDS = ("task", "audit", "_shoot", "_hook", "_scheduler", "_viewer", "status", "list", "wait")
+AGENT_CMDS = ("task", "audit", "_shoot", "_hook", "_scheduler", "_viewer", "status", "list", "wait", "stats")
 OWNER_ONLY = "Only the owner can do this. Ask with `coord task ask`."
 TASK_FILES = ("knowledge.md", "changes.md", "review.md", "resume.md")
 ROLE_NAMES = {"planner": "planner", "builder": "builder", "officer": "hallucination officer", "shooter": "screenshot taker",
@@ -61,16 +63,25 @@ DEFAULTS = {
     "base_branch": "",
     "max_parallel": 3,
     "setup": "",
+    "check": "",
+    "pre_gate": "",
     "gate": "",
     "gate_cwd": ".",
+    "gate_retries": 1,
+    "sync_base": True,
     "dev": {"command": "", "cwd": ".", "ready_path": "/"},
-    "shots": {"widths": [1280, 390], "themes": ["light", "dark"], "height": 900, "wait_ms": 1500},
-    "models": {"planner": "opus", "builder": "opus", "reviewer": "opus", "officer": "opus", "shooter": "haiku",
+    "shots": {"widths": [1280, 390], "themes": ["light", "dark"], "height": 900, "wait_ms": 1500,
+              "browsers": ["chromium"]},
+    "models": {"planner": "opus", "builder": "opus", "reviewer": "opus", "officer": "sonnet", "shooter": "haiku",
                "mapper": "opus", "briefer": "sonnet", "writer": "sonnet"},
-    "efforts": {"planner": "high", "builder": "high", "reviewer": "medium", "officer": "high",
+    "efforts": {"planner": "medium", "builder": "high", "reviewer": "medium", "officer": "medium",
                 "officer_task": "medium", "shooter": "low", "mapper": "medium",
-                "briefer": "low", "writer": "medium"},
-    "officer": {"plan": True, "tasks": True, "max_rounds": 3},
+                "briefer": "low", "writer": "low"},
+    # plan: "auto" audits a plan only in full auto or when it has more than 3 tasks; "always" and "never" too
+    "officer": {"plan": "auto", "tasks": False, "max_rounds": 1, "task_rounds": 2},
+    "question_minutes": 10,
+    "stall_minutes": 30,
+    "time_box": {"S": 20, "M": 40, "L": 60},
     "permission_mode": "auto",
     "deny": [
         "Bash(git push:*)", "Bash(git commit:*)", "Bash(git rebase:*)", "Bash(git reset --hard:*)",
@@ -151,10 +162,15 @@ def git(cwd, *args, check=True):
 
 
 def read_json(path, default=None):
-    try:
-        return json.loads(Path(path).read_text())
-    except (FileNotFoundError, ValueError):
-        return default
+    for i in range(40):
+        try:
+            return json.loads(Path(path).read_text())
+        except (FileNotFoundError, ValueError):
+            return default
+        except PermissionError:  # Windows, while a writer replaces the file
+            if not WINDOWS or i == 39:
+                raise
+            time.sleep(0.05)
 
 
 def write_json(path, data):
@@ -226,7 +242,31 @@ def slug(text, n=40):
     return s[:n].strip("-") or "run"
 
 
-def alive(pid):
+def proc_start(pid):
+    """When a process started, as a number that only means something for comparison; "" when unknown."""
+    if not pid:
+        return ""
+    if WINDOWS:
+        try:
+            h = kernel32.OpenProcess(0x1000, False, int(pid))
+        except (ValueError, OverflowError, TypeError):
+            return ""
+        if not h:
+            return ""
+        times = [ctypes.c_ulonglong() for _ in range(4)]
+        ok = kernel32.GetProcessTimes(h, *[ctypes.byref(t) for t in times])
+        kernel32.CloseHandle(h)
+        return str(times[0].value) if ok else ""
+    try:
+        return Path("/proc/%d/stat" % int(pid)).read_text().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError, ValueError):
+        pass
+    r = subprocess.run(["ps", "-o", "lstart=", "-p", str(int(pid))], capture_output=True, text=True)
+    return r.stdout.strip()
+
+
+def alive(pid, start=""):
+    """True while the process runs. With `start` (from proc_start), a reused pid doesn't count."""
     if not pid:
         return False
     if WINDOWS:  # os.kill(pid, 0) would terminate the process here
@@ -239,16 +279,33 @@ def alive(pid):
         code = ctypes.c_ulong()
         ok = kernel32.GetExitCodeProcess(h, ctypes.byref(code))
         kernel32.CloseHandle(h)
-        return bool(ok) and code.value == 259  # STILL_ACTIVE
+        if not (bool(ok) and code.value == 259):  # STILL_ACTIVE
+            return False
+    else:
+        try:
+            os.kill(int(pid), 0)
+        except (OSError, ValueError):
+            return False
+    return not start or proc_start(pid) in ("", start)
+
+
+def try_lock(path):
+    """An exclusive lock held for as long as the returned file stays open; None when another process holds it."""
+    f = open(path, "a+")
     try:
-        os.kill(int(pid), 0)
-        return True
-    except (OSError, ValueError):
-        return False
+        if WINDOWS:
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return f
+    except OSError:
+        f.close()
+        return None
 
 
-def kill_group(pid, grace=5.0):
-    if not alive(pid):
+def kill_group(pid, grace=5.0, start=""):
+    if not alive(pid, start):  # with `start`, a pid the system gave to another process since is left alone
         return
     if WINDOWS:
         subprocess.run(["taskkill", "/T", "/F", "/PID", str(int(pid))], capture_output=True)
@@ -271,10 +328,32 @@ def kill_group(pid, grace=5.0):
             return
 
 
+TOAST = r"""$ErrorActionPreference = 'SilentlyContinue'
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+$x = $t.GetElementsByTagName('text')
+$x.Item(0).AppendChild($t.CreateTextNode($env:COORD_TOAST_TITLE)) > $null
+$x.Item(1).AppendChild($t.CreateTextNode($env:COORD_TOAST_TEXT)) > $null
+$id = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($id).Show([Windows.UI.Notifications.ToastNotification]::new($t))
+"""
+
+
 def notify(title, text):
-    if sys.platform == "darwin":
-        script = "display notification %s with title %s" % (json.dumps(text), json.dumps(title))
-        subprocess.run(["osascript", "-e", script], capture_output=True)
+    try:
+        if sys.platform == "darwin":
+            script = "display notification %s with title %s" % (json.dumps(text), json.dumps(title))
+            subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+        elif WINDOWS:
+            import base64
+            encoded = base64.b64encode(TOAST.encode("utf-16-le")).decode()
+            spawn(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                  env=dict(os.environ, COORD_TOAST_TITLE=title[:120], COORD_TOAST_TEXT=text[:300]))
+        elif shutil.which("notify-send"):
+            subprocess.run(["notify-send", title, text], capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def open_url(url):
@@ -321,6 +400,60 @@ def is_test_file(cfg, path):
     if any(fnmatch.fnmatch(parts[-1], pat) for pat in cfg.get("test_names", [])):
         return True
     return any(d in cfg.get("test_dirs", []) or d.endswith("Tests") or d.endswith(".Tests") for d in parts[:-1])
+
+
+TEST_DECL = re.compile(r"\b(it|test|describe|context|specify|suite)(\.\w+)?\s*\(|\bdef test_|@Test\b|\[(Fact|Theory|Test|TestMethod)\]|\bfunc Test")
+
+
+def test_edit_lines(path, tool, ti):
+    """How many lines an edit to an existing test file changes, or None when it adds a test or creates the file."""
+    import difflib
+    try:
+        current = Path(path).read_text(errors="replace")
+    except OSError:
+        return None
+    if tool == "Write":
+        pairs = [(current, ti.get("content") or "")]
+    elif tool == "MultiEdit":
+        pairs = [(e.get("old_string") or "", e.get("new_string") or "") for e in ti.get("edits") or []]
+    else:
+        pairs = [(ti.get("old_string") or "", ti.get("new_string") or "")]
+    n = 0
+    for old, new in pairs:
+        if len(TEST_DECL.findall(new)) > len(TEST_DECL.findall(old)):
+            return None
+        diff = [x for x in difflib.ndiff(old.splitlines(), new.splitlines()) if x[:1] in "+-" and x[2:].strip()]
+        n += max(sum(1 for x in diff if x[0] == "+"), sum(1 for x in diff if x[0] == "-"))
+    return n
+
+
+GATE_ERROR = re.compile(r"error|Error|ERROR|FAIL|Failed|failed|✕|✗|TS\d{4}|Traceback|panicked|exception", re.I)
+
+
+def gate_excerpt(text, cap=150):
+    """The error blocks of a gate log with a little context: the real error is often far from the tail."""
+    lines = text.splitlines()
+    hits = [i for i, x in enumerate(lines) if GATE_ERROR.search(x)][:40]
+    if not hits:
+        return "\n".join(lines[-60:])
+    keep = sorted({j for i in hits for j in range(max(0, i - 3), min(len(lines), i + 4))})
+    out, last = [], -2
+    for j in keep:
+        if j != last + 1:
+            out.append("...")
+        out.append(lines[j])
+        last = j
+    return "\n".join(out[:cap])
+
+
+def gate_signature(text):
+    """The failing lines of a gate log without numbers, durations or paths, to tell a known failure from a new one."""
+    sig = set()
+    for x in text.splitlines():
+        if GATE_ERROR.search(x):
+            x = re.sub(r"[A-Za-z]:[\\/][^\s:]*|/[^\s:]*/", "", x)
+            sig.add(re.sub(r"\d+(\.\d+)?", "#", x).strip())
+    return sig
 
 
 def owner_words(data):
@@ -373,12 +506,18 @@ def instructions_block(r, role):
     shell = ["Your Bash tool is Git Bash on Windows: write paths in commands with forward slashes (C:/dir/file)."]         if WINDOWS else []
     if not files:
         return shell + ["Project instructions: none found."]
-    lines = shell + ["Project instructions: read these first, in full. They are the owner's current versions and come before "
-             "your role wherever the two disagree, including any guides they tell you to read:"]
+    lines = shell + ["Project instructions: Claude Code has already loaded these into your context, so don't open them "
+                     "again. They are the owner's current versions and win wherever they and your role disagree:"]
     lines += ["- %s" % f for f in files]
+    if role in ("builder", "officer"):
+        lines.append("Steps they ask of every new session to get oriented (reading an index, a README or a product "
+                     "page) were done by the planner, which put what you need in your brief. Open such a file only "
+                     "when your brief names it or you need a fact from it.")
     if role == "builder":
         lines.append("Your worktree holds the committed copies of the project's files; where they differ from the "
                      "files above, the files above win.")
+    lines.append("Coordinator commits your work on the run branch and pushes it, which is how a project rule to "
+                 "commit or push is met in a run. Don't ask the owner about it.")
     return lines
 
 
@@ -451,6 +590,11 @@ class Run:
     def wt(self, tid):
         return self.brain / "wt" / tid
 
+    def alive(self, which):
+        """The scheduler or the viewer is running, checked by pid and start time."""
+        st = self.state()
+        return alive(st.get("%s_pid" % which), st.get("%s_start" % which, ""))
+
     def poke(self):
         self.brain.mkdir(parents=True, exist_ok=True)
         (self.brain / "poke").write_text(now())
@@ -513,10 +657,37 @@ def find(data, tid):
 def new_task(tid, title, type_="build", deps=None, files=None, size="M", model="", effort=""):
     return {"id": tid, "title": title, "type": type_, "status": "queue", "depends_on": deps or [],
             "files": files or [], "size": size, "model": model, "effort": effort, "attempts": 0,
-            "session": "", "question": "", "question_kind": "", "answer": "", "qa": [], "inbox": [],
+            "session": "", "question": "", "question_kind": "", "question_default": "", "question_at": "",
+            "answer": "", "qa": [], "inbox": [],
             "resume": False, "resume_msg": "", "audit_round": 0, "audit_verdict": "", "audit_file": "",
             "tests": False, "ui": False, "merged": False, "merge_state": "", "started": "", "finished": "", "minutes": 0.0,
-            "tokens": 0, "cost": 0.0}
+            "tokens": 0, "cost": 0.0, "intent": "", "rest": "", "pending_approval": False}
+
+
+def officer_on_plan(cfg, data):
+    mode = cfg["officer"].get("plan", "auto")
+    if mode in (True, "always"):
+        return True
+    if mode in (False, "never", None, ""):
+        return False
+    return bool(data.get("full_auto")) or sum(1 for t in data["tasks"] if t["type"] == "build"
+                                              and t["status"] != "skipped" and not t.get("parent")) > 3
+
+
+def critical_path(data):
+    """(tasks, longest chain of dependencies) over the run's own build tasks."""
+    tasks = {t["id"]: t for t in data["tasks"] if t["type"] == "build" and t["status"] != "skipped" and not t.get("parent")}
+    memo = {}
+
+    def depth(tid, seen=()):
+        if tid in memo:
+            return memo[tid]
+        if tid in seen or tid not in tasks:
+            return 0
+        memo[tid] = 1 + max([depth(d, seen + (tid,)) for d in tasks[tid]["depends_on"]] or [0])
+        return memo[tid]
+
+    return len(tasks), max([depth(t) for t in tasks] or [0])
 
 
 def next_id(data, prefix="T"):
@@ -565,11 +736,17 @@ def derive_status(data, running=False):
         return "running"
     if data.get("mode") == "plan":
         return "planned"
-    if any(t["status"] in OPEN for t in tasks if t["type"] != "plan"):
+    if any(t["status"] in OPEN for t in tasks if t["type"] != "plan" and not t.get("pending_approval")):
         return "running"
     if any(t["type"] in WORK and t["status"] == "done" and not t.get("merged") for t in tasks):
         return "running"
+    if any(t.get("pending_approval") and t["status"] == "queue" for t in tasks):
+        return "waiting_on_you"
     return "finished"
+
+
+def pending_changes(data):
+    return [t for t in data["tasks"] if t.get("pending_approval") and t["status"] == "queue"]
 
 
 def summary(data, scheduler_alive=None):
@@ -578,8 +755,11 @@ def summary(data, scheduler_alive=None):
     active = [t["id"] for t in data["tasks"] if t["status"] in ("in_progress", "review", "audit")]
     waiting = [t["id"] for t in data["tasks"] if t["status"] == "waiting_on_you"]
     tok = sum(t.get("tokens", 0) for t in data["tasks"])
+    cost = sum(t.get("cost", 0) for t in data["tasks"])
     mins = sum(t.get("minutes", 0) for t in data["tasks"])
     parts = ["%s: %s" % (data["name"], data["status"].replace("_", " "))]
+    if data.get("quick"):
+        parts.append("quick run")
     if data.get("full_auto"):
         parts.append("full auto")
     if tasks:
@@ -590,27 +770,51 @@ def summary(data, scheduler_alive=None):
         parts.append("waiting on you: " + ", ".join(waiting))
     if not data.get("plan_approved") and data["status"] == "waiting_on_you" and not waiting:
         parts.append("the plan waits for your approval")
-    parts.append("%s agent time, %s tokens" % (human_minutes(mins), human_tokens(tok)))
+    if data.get("plan_approved") and pending_changes(data):
+        parts.append("plan changes wait for your approval")
+    parts.append("$%.2f, %s agent time (%s tokens)" % (cost, human_minutes(mins), human_tokens(tok)))
     if scheduler_alive is False and data["status"] in ("running", "planning"):
         parts.append("scheduler is not running - use `coord resume`")
     return " · ".join(parts)
 
 
+def question_deadline(r, data, t):
+    """When an agent's question answers itself with its default, or None for a question that waits for the owner."""
+    if t.get("status") != "waiting_on_you" or (t.get("question_kind") or "agent") != "agent" \
+            or not t.get("question_default") or not t.get("question_at"):
+        return None
+    minutes = 3 if data.get("full_auto") else float(r.cfg.get("question_minutes") or 0)
+    if minutes <= 0:
+        return None
+    return dt.datetime.fromisoformat(t["question_at"]) + dt.timedelta(minutes=minutes)
+
+
 def owner_actions(r, data, scheduler_alive=None):
     """Everything waiting on the owner, in order. One list for the live page and the chat."""
     if scheduler_alive is None:
-        scheduler_alive = alive(r.state().get("scheduler_pid"))
+        scheduler_alive = r.alive("scheduler")
     out = []
     add = lambda key, kind, text, do, **kw: out.append(dict(key=key, kind=kind, text=text, do=do, **kw))
     asks = [t for t in data["tasks"] if t["status"] == "waiting_on_you"]
     if not data.get("plan_approved") and data["status"] == "waiting_on_you" and not asks:
         add("plan", "plan", "The plan is ready for your approval", "approve it (`coord approve`) or say what to change")
+    changes = pending_changes(data)
+    if data.get("plan_approved") and changes and not any(t["type"] == "plan" and t["status"] in OPEN for t in data["tasks"]):
+        add("changes-" + ",".join(t["id"] for t in changes), "changes",
+            "The planner added %s for your addition" % ", ".join("%s (%s)" % (t["id"], t["title"]) for t in changes),
+            "approve them (`coord approve`) or say what to change (`coord add`)", tasks=[t["id"] for t in changes])
     for t in asks:
         qk = t.get("question_kind") or "agent"
         do = {"officer": "`coord accept %s`, or `coord answer %s \"<what to change>\"`" % (t["id"], t["id"]),
               "stalled": "`coord retry %s`, `coord stop %s`, or `coord answer %s \"<guidance>\"`" % ((t["id"],) * 3)}
-        add("q-" + t["id"], "question", t.get("question") or "", do.get(qk, "`coord answer %s \"<answer>\"`" % t["id"]),
-            task=t["id"], title=t["title"], question_kind=qk)
+        default_at = question_deadline(r, data, t)
+        extra = dict(default=t.get("question_default") or "", default_at=default_at.isoformat(timespec="seconds")
+                     if default_at else "")
+        text = t.get("question") or ""
+        if default_at:
+            text += " (default if you don't answer by %s: %s)" % (default_at.strftime("%H:%M"), t["question_default"])
+        add("q-" + t["id"], "question", text, do.get(qk, "`coord answer %s \"<answer>\"`" % t["id"]),
+            task=t["id"], title=t["title"], question_kind=qk, **extra)
     if scheduler_alive is False and data["status"] in ("running", "planning"):
         add("scheduler", "scheduler", "The scheduler stopped while the run was %s" % data["status"], "`coord resume`")
     for f in data.get("followups") or []:
@@ -715,13 +919,29 @@ def session_exists(sid):
     return bool(sid) and any((Path.home() / ".claude" / "projects").glob("*/%s.jsonl" % sid))
 
 
+def role_prompt_file(r, role):
+    """The role's prompt as a file for --append-system-prompt-file: an argument with newlines doesn't survive cmd.exe."""
+    d = r.brain / "roles"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / ("%s.md" % role)
+    text = role_prompt(role)
+    if not f.exists() or f.read_text() != text:
+        f.write_text(text)
+    return f
+
+
+def agents_json(r):
+    return json.dumps(read_json(r.brain / "agents.json", {}), ensure_ascii=False, separators=(",", ":"))
+
+
 def write_agent_files(r):
     r.brain.mkdir(parents=True, exist_ok=True)
     agents = {"coord-reviewer": {
         "description": "Fresh code reviewer for one coordinator task: reads the task's knowledge file, "
                        "its changes.md and the diff, then writes review.md.",
         "prompt": role_prompt("reviewer"),
-        "model": r.cfg["models"]["reviewer"]},
+        "model": r.cfg["models"]["reviewer"],
+        "effort": r.cfg["efforts"]["reviewer"]},
         "coord-briefer": {
         "description": "Reads big content (long files, logs, script outputs, scraped data) on a smaller model and "
                        "writes a short brief for the agent that called it.",
@@ -738,11 +958,13 @@ def write_agent_files(r):
     write_json(r.brain / "settings.json", settings)
 
 
-def agent_env(r, tid, role, cwd):
+def agent_env(r, tid, role, cwd, data=None):
     env = dict(os.environ)
     env.update(COORD_PROJECT=str(r.project), COORD_RUN_DIR=str(r.dir), COORD_TASK=tid, COORD_ROLE=role, COORD_ROOT=str(ROOT),
                CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD="1",
                COORD_WT=str(cwd), PATH="%s%s%s" % (shim_dir() if WINDOWS else ROOT / "bin", os.pathsep, env.get("PATH", "")))
+    if data:
+        env.update(COORD_RUN_BRANCH=data.get("branch") or "", COORD_BASE=data.get("base") or "")
     return env
 
 
@@ -804,29 +1026,55 @@ def ignore_store(r, wt):
     commit_all(wt, "Ignore Coordinator's local folder.", paths=(".gitignore",))
 
 
+GIT_LOCK = threading.RLock()  # the scheduler's merges run on their own thread; git refs don't take two writers well
+
+
 def prepare_worktree(r, data, t):
-    ensure_run_wt(r, data)
-    wt, br = r.wt(t["id"]), r.task_branch(t["id"])
-    if wt.exists():
-        return wt
-    if git(r.project, "branch", "--list", br):
-        git(r.project, "worktree", "add", str(wt), br)
-    else:
-        git(r.project, "worktree", "add", "-b", br, str(wt), data["branch"])
+    with GIT_LOCK:
+        ensure_run_wt(r, data)
+        wt, br = r.wt(t["id"]), r.task_branch(t["id"])
+        if wt.exists():
+            return wt
+        if git(r.project, "branch", "--list", br):
+            git(r.project, "worktree", "add", str(wt), br)
+        else:
+            git(r.project, "worktree", "add", "-b", br, str(wt), data["branch"])
     setup_worktree(r, wt)
     patch = r.task_dir(t["id"]) / "wip.patch"
     if nonempty(patch):
         res = run(["git", "apply", "--3way", "--whitespace=nowarn", patch], cwd=wt, check=False)
         r.log("%s: applied saved work (%s)" % (t["id"], "ok" if res.returncode == 0 else res.stderr.strip()[-200:]))
-        patch.rename(patch.with_suffix(".patch.applied"))
+        if res.returncode == 0:
+            patch.rename(patch.with_suffix(".patch.applied"))
+        else:
+            with r.edit() as d:
+                find(d, t["id"])["resume_msg"] = (
+                    "Saved work from an earlier session did not apply cleanly; it is in %s. Apply what still fits by "
+                    "hand, then continue." % patch)
     return wt
+
+
+def same_instructions(a, b):
+    names = [n for n in INSTRUCTION_NAMES if (Path(a) / n).is_file() or (Path(b) / n).is_file()]
+    for n in names:
+        try:
+            if (Path(a) / n).read_bytes() != (Path(b) / n).read_bytes():
+                return False
+        except OSError:
+            return False
+    return True
 
 
 def add_dirs(r, cwd):
     _, dirs = project_instructions(r.project)
     skip = {Path(cwd).resolve(), Path.home().resolve()}  # the user's own CLAUDE.md loads in every session anyway
-    extra = [d for d in dirs if Path(d).resolve() not in skip]
-    return ["--add-dir"] + [str(d) for d in extra] if extra else []
+    own = Path(cwd).resolve() != r.project
+    if own and same_instructions(cwd, r.project):
+        skip.add(r.project)  # a worktree loads its own committed copies; the same files twice only cost tokens
+    extra = [str(d) for d in dirs if Path(d).resolve() not in skip]
+    if own and not any(under(str(r.dir.resolve()), d) for d in extra):
+        extra.append(str(r.dir))  # the task's own folder: its brief, changes.md, review.md
+    return ["--add-dir"] + extra if extra else []
 
 
 def first_prompt(r, data, t, role, cwd):
@@ -843,16 +1091,31 @@ def first_prompt(r, data, t, role, cwd):
                   "Mode: %s" % ("plan only - milestones and tasks for later runs; nothing gets built now"
                                 if data["mode"] == "plan" else "build - the tasks are built right after the owner approves")]
     elif role == "builder":
-        gate = r.cfg.get("gate") or "none configured - run the project's own checks for the area you touched"
+        check = r.cfg.get("check") or "none configured - run the fast checks for what you touched (typecheck or " \
+                                      "lint of that package, the tests next to the files you changed), not a full build"
+        gate = r.cfg.get("gate")
         lines += ["Your worktree (work only here): %s, on branch %s, made from the run branch %s." % (cwd, r.task_branch(t["id"]), data["branch"]),
                   "Write your changes file to: %s" % (kd / "changes.md"),
                   "Your reviewer writes to: %s" % (kd / "review.md"),
-                  "Gate: %s (run it from %s in your worktree)." % (gate, r.cfg.get("gate_cwd", ".")),
+                  "Check (fast, run it from %s in your worktree before you finish): %s" % (r.cfg.get("gate_cwd", "."), check),
+                  ("The full gate (%s) runs once, by the scheduler, after your work merges; don't run it yourself unless "
+                   "your brief says so." % gate) if gate else "No full gate is configured; your check is the proof.",
                   "Files outside your worktree you may edit in place (the scheduler doesn't commit them): %s"
                   % (", ".join(t.get("external") or []) or "none"),
                   "Design language for this UI task: %s" % (design_line(data) if t.get("ui") else "not a UI task"),
-                  "Tests for this task: %s" % ("ON - the owner asked for tests; write only the few the knowledge file names, short and to the point."
-                                               if t.get("tests") else "OFF - don't add, change or delete any test file. If an existing test breaks because of your change, ask the owner with `coord task ask` instead of editing it.")]
+                  "Tests for this task: %s" % (
+                      "ON - the owner asked for tests; write only the few the knowledge file names, short and to the point."
+                      if t.get("tests") else
+                      "OFF - don't add or delete test files or add test cases. If your change breaks an existing test "
+                      "only through a type, name or signature it uses, make that small edit (up to a few lines per file) "
+                      "and list it under \"Forced test edits\" in changes.md. Anything bigger: ask with `coord task ask`.")]
+        if data.get("quick"):
+            lines += ["This is a quick run: there is no planner and no plan. Your brief is the owner's request. Follow "
+                      "\"Quick runs\" in your role.",
+                      "Write the pull request description to: %s" % (r.dir / "pr.md")]
+        if t.get("ui") and r.cfg["dev"].get("command"):
+            lines.append("Screenshots: `coord _shoot --page \"<path>\"` shoots your worktree against the base branch "
+                         "and saves the PNGs in your task folder.")
     elif role == "shooter":
         lines += ["Plan: %s" % (r.dir / "plan.md")]
     elif role == "writer":
@@ -902,7 +1165,8 @@ def audit_prompt(r, data, t):
                 "Plan: %s" % (r.dir / "plan.md"),
                 "The task's brief: %s" % (r.task_dir(t["id"]) / "knowledge.md"),
                 "What the builder says it changed: %s" % (r.task_dir(t["id"]) / "changes.md"),
-                "The files it changed: run `git -C \"%s\" diff --stat %s`" % (r.wt(t["id"]), data["branch"])]
+                "The change itself: run `git -C \"%s\" diff --stat %s`, then read the diff (`git -C \"%s\" diff %s`) "
+                "in chunks." % (r.wt(t["id"]), data["branch"], r.wt(t["id"]), data["branch"])]
         if r.wt(t["id"]).exists():
             tests = [f for f in changed_files(r.wt(t["id"]), data["branch"]) if is_test_file(r.cfg, f)]
             tests_line = ["Test files this change adds or modifies: %s. Tests for this task are %s."
@@ -914,14 +1178,77 @@ def audit_prompt(r, data, t):
                       "Everything the owner has asked for, word for word (the request, then later additions and answers):",
                       "<<<", owner_words(data), ">>>"] + what + tests_line +
                      ["Write your report to: %s" % report,
-                      "Then run `coord audit approve --file \"%s\"` or `coord audit revise --file \"%s\"`, and end your turn." % (report, report)])
+                      "Then run `coord audit approve --file \"%s\"`, `coord audit notes --file \"%s\"` (approve, with "
+                      "should-fix notes for the owner) or `coord audit revise --file \"%s\"`, and end your turn."
+                      % (report, report, report)])
 
 
 class Job:
-    def __init__(self, kind, tid, role, proc, out_path, err_file):
+    """One agent process: started here, or adopted from an earlier scheduler of this run."""
+
+    def __init__(self, kind, tid, role, proc, out_path, err_file, pid=None, start="", t0=None, session=""):
         self.kind, self.tid, self.role, self.p = kind, tid, role, proc
         self.out_path, self.err = out_path, err_file
-        self.t0 = time.time()
+        self.pid = proc.pid if proc else pid
+        self.start = start or proc_start(self.pid)
+        self.t0 = t0 or time.time()
+        self.session = session
+        self.stalled = False
+        self.returncode = None
+
+    def poll(self):
+        if self.p is not None:
+            self.returncode = self.p.poll()
+            return self.returncode
+        return None if alive(self.pid, self.start) else -1
+
+    def record(self):
+        return {"pid": self.pid, "start": self.start, "task": self.tid, "role": self.role, "kind": self.kind,
+                "out": str(self.out_path), "t0": self.t0, "session": self.session,
+                "since": dt.datetime.fromtimestamp(self.t0).astimezone().isoformat(timespec="seconds")}
+
+
+def adopt_jobs(r):
+    """The agents an earlier scheduler of this run left running, so a restart neither loses nor duplicates them."""
+    jobs = {}
+    for key, a in (r.state().get("agents") or {}).items():
+        if a.get("pid") and a.get("out") and alive(a["pid"], a.get("start", "")):
+            jobs[key] = Job(a["kind"], a["task"], a["role"], None, Path(a["out"]), None, pid=a["pid"],
+                            start=a.get("start", ""), t0=a.get("t0"), session=a.get("session", ""))
+    return jobs
+
+
+def claude_argv(cfg):
+    """The claude CLI to start. An npm `claude.cmd` would run through cmd.exe, which mangles JSON and newlines in
+    arguments, so its node script is started directly."""
+    exe = cfg["claude"]
+    if isinstance(exe, list):  # a command line, for a wrapper or a stand-in
+        return [str(x) for x in exe]
+    if WINDOWS:
+        found = shutil.which(exe)
+        if found and found.lower().endswith((".cmd", ".bat")):
+            cli = Path(found).parent / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js"
+            node = shutil.which("node")
+            if cli.is_file() and node:
+                return [node, str(cli)]
+        return [found or exe]
+    return [exe]
+
+
+def claude_found(cfg):
+    exe = claude_argv(cfg)[0]
+    return bool(shutil.which(exe) or Path(exe).is_file())
+
+
+def agent_cmd(r, role, cwd, model, effort, name, sid, resume):
+    cfg = r.cfg
+    cmd = claude_argv(cfg) + ["-p"] + add_dirs(r, cwd) + [
+        "--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
+        "--settings", str(r.brain / "settings.json"), "--output-format", "json", "-n", name,
+        "--append-system-prompt-file", str(role_prompt_file(r, role))]
+    if role != "shooter":
+        cmd += ["--agents", agents_json(r)]
+    return cmd + (["--resume", sid] if resume else ["--session-id", sid])
 
 
 def start_job(r, kind, tid):
@@ -940,13 +1267,11 @@ def start_job(r, kind, tid):
             tt["audit_verdict"] = ""
             tt.setdefault("audit_sessions", []).append({"round": tt["audit_round"], "session": sid})
             t = dict(tt)
-        cwd = r.project
+        cwd, resume = r.project, False
         model = cfg["models"]["officer"]
         effort = cfg["efforts"]["officer"] if t["type"] == "plan" else cfg["efforts"].get("officer_task", "medium")
-        cmd = [cfg["claude"], "-p"] + add_dirs(r, cwd) + ["--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
-               "--settings", r.brain / "settings.json", "--output-format", "json", "-n", "%s:%s:officer" % (r.name, tid),
-               "--append-system-prompt", role_prompt("officer"), "--agents", (r.brain / "agents.json").read_text(),
-               "--session-id", sid, audit_prompt(r, data, t)]
+        name = "%s:%s:officer" % (r.name, tid)
+        prompt = audit_prompt(r, data, t)
     else:
         role = role_of(t)
         cwd = prepare_worktree(r, data, t) if role == "builder" else r.project
@@ -954,39 +1279,38 @@ def start_job(r, kind, tid):
             tt = find(d, tid)
             answer = tt.get("answer", "")
             if answer:
-                tt["qa"].append({"q": tt.get("question", ""), "a": answer})
+                tt["qa"].append({"q": tt.get("question", ""), "a": answer,
+                                 "by_default": bool(tt.get("answered_by_default"))})
             resume = bool(tt.get("resume") and session_exists(tt.get("session")))
             sid = tt["session"] if resume else str(uuid.uuid4())
-            if resume:
-                prompt = ("The owner answered your question: %s" % answer) if answer else (
-                    tt.get("resume_msg") or "Continue from where you stopped, then finish the task.")
+            if resume and answer and tt.get("answered_by_default"):
+                prompt = ("The owner didn't answer within the deadline, so your default stands: %s. Act on it, note "
+                          "it in changes.md, and carry on." % answer)
+            elif resume and answer:
+                prompt = "The owner answered your question: %s" % answer
+            elif resume:
+                prompt = tt.get("resume_msg") or "Continue from where you stopped, then finish the task."
             else:
                 prompt = first_prompt(r, d, tt, role, cwd)
             tt.update(status="in_progress", session=sid, resume=False, resume_msg="", answer="", question="",
-                      question_kind="", started=tt["started"] or now())
+                      question_kind="", question_default="", question_at="", answered_by_default=False,
+                      started=tt["started"] or now())
             t = dict(tt)
         model = t.get("model") or cfg["models"][role]
         effort = t.get("effort") or cfg["efforts"][role]
-        cmd = [cfg["claude"], "-p"] + add_dirs(r, cwd) + ["--model", model, "--effort", effort, "--permission-mode", cfg["permission_mode"],
-               "--settings", r.brain / "settings.json", "--output-format", "json", "-n", "%s:%s" % (r.name, tid),
-               "--append-system-prompt", role_prompt(role)]
-        if role != "shooter":
-            cmd += ["--agents", (r.brain / "agents.json").read_text()]
-        cmd += (["--resume", sid] if resume else ["--session-id", sid]) + [prompt]
+        name = "%s:%s" % (r.name, tid)
+    cmd = agent_cmd(r, role, cwd, model, effort, name, sid, resume)
+    prompt_file = logs / ("%s-%d.prompt" % (tid, n))
+    prompt_file.write_text(prompt)
     out_path = logs / ("%s-%d.json" % (tid, n))
     out = open(out_path, "w")
     err = open(logs / ("%s-%d.err" % (tid, n)), "w")
-    stdin = subprocess.DEVNULL
-    if WINDOWS and len(subprocess.list2cmdline(argv(cmd))) > 30000:  # CreateProcess caps a command line at 32767
-        prompt_file = logs / ("%s-%d.prompt" % (tid, n))
-        prompt_file.write_text(str(cmd.pop()))
-        stdin = open(prompt_file)
-    proc = spawn(cmd, cwd=str(cwd), env=agent_env(r, tid, role, cwd), stdout=out, stderr=err, stdin=stdin)
+    stdin = open(prompt_file)  # the prompt on stdin: no command-line length limit, no quoting through a shell
+    proc = spawn(cmd, cwd=str(cwd), env=agent_env(r, tid, role, cwd, data), stdout=out, stderr=err, stdin=stdin)
     out.close()
-    if stdin is not subprocess.DEVNULL:
-        stdin.close()
-    r.log("started %s %s (%s, pid %d)" % (role, tid, kind, proc.pid))
-    return Job(kind, tid, role, proc, out_path, err)
+    stdin.close()
+    r.log("started %s %s (%s, pid %d, %s/%s)" % (role, tid, kind, proc.pid, model, effort))
+    return Job(kind, tid, role, proc, out_path, err, session=sid)
 
 
 def usage_of(out):
@@ -1004,22 +1328,36 @@ def usage_of(out):
 
 
 def finish_job(r, job):
-    job.err.close()
-    out = read_json(job.out_path, None) if job.out_path.exists() and job.out_path.stat().st_size else None
+    if job.err:
+        job.err.close()
+    out = None
+    if job.out_path.exists() and job.out_path.stat().st_size:
+        out = read_json(job.out_path, None)
     tok, cost = usage_of(out)
-    rounds = int(r.cfg["officer"].get("max_rounds", 3))
+    plan_rounds = int(r.cfg["officer"].get("max_rounds", 1))
+    task_rounds = int(r.cfg["officer"].get("task_rounds", 2))
     with r.edit() as d:
         t = find(d, job.tid)
         t["minutes"] = round(t.get("minutes", 0) + (time.time() - job.t0) / 60, 1)
         t["tokens"] = t.get("tokens", 0) + tok
         t["cost"] = round(t.get("cost", 0) + cost, 4)
         if job.kind == "audit":
+            rounds = plan_rounds if t["type"] in ("plan", "map") else task_rounds
             if t["status"] != "audit":
                 pass
-            elif t["audit_verdict"] == "approve":
+            elif t["audit_verdict"] in ("approve", "notes"):
                 t["status"] = "done"
             elif t["audit_verdict"] == "revise":
-                if t["audit_round"] >= rounds:
+                if t["type"] in ("plan", "map") and t["audit_round"] >= rounds:
+                    # The last round: the planner fixes what it can once more, and the owner sees the report
+                    t["audit_final"] = True
+                    t["status"] = "queue"
+                    t["resume"] = True
+                    t["resume_msg"] = ("The hallucination officer asks for changes: read its report at %s. Fix every "
+                                       "must-fix item that is right, say in one line under \"Approach\" in plan.md why "
+                                       "you left any, then run `coord task done`. The owner sees the report with the "
+                                       "plan; there is no further audit." % t["audit_file"])
+                elif t["audit_round"] >= rounds:
                     t["status"] = "waiting_on_you"
                     t["question_kind"] = "officer"
                     t["question"] = ("The hallucination officer still asks for changes after %d rounds (last report: %s). "
@@ -1034,23 +1372,31 @@ def finish_job(r, job):
                 t["audit_round"] -= 1
                 t["audit_fail"] = t.get("audit_fail", 0) + 1
                 if t["audit_fail"] >= 2:
-                    t["status"] = "waiting_on_you"
-                    t["question_kind"] = "officer"
-                    t["question"] = "The officer could not finish its check. Accept the work as it is, or reply with what to do."
+                    t["status"] = "done" if t["type"] in ("plan", "map") else "waiting_on_you"
+                    if t["status"] == "waiting_on_you":
+                        t["question_kind"] = "officer"
+                        t["question"] = "The officer could not finish its check. Accept the work as it is, or reply with what to do."
         elif t["status"] in ("in_progress", "review"):
             t["attempts"] += 1
-            last = (out or {}).get("result") or "(no result; exit %s)" % job.p.returncode
+            last = (out or {}).get("result") or "(no result; exit %s)" % job.returncode
             if t["attempts"] < 2:
                 t["status"] = "queue"
                 t["resume"] = True
-                t["resume_msg"] = "Your session ended before the task was done. Check where you are, then finish the task."
+                t["resume_msg"] = ("Your session was stopped after %d minutes without progress. Check where you are, "
+                                   "then finish the task; run long commands in the background with their output in a "
+                                   "log file." % int(r.cfg.get("stall_minutes") or 30)) if job.stalled else \
+                    "Your session ended before the task was done. Check where you are, then finish the task."
             elif t["type"] == "pr":  # the pull request keeps its short description; the run still finishes
                 t["status"] = "skipped"
             else:
                 t["status"] = "waiting_on_you"
                 t["question_kind"] = "stalled"
                 t["question"] = "%s stopped twice without finishing. Its last words: %s - retry it, stop it, or reply with guidance." % (job.tid, str(last)[:400])
-    r.log("finished %s %s (exit %s, %s tokens)" % (job.role, job.tid, job.p.returncode, tok))
+    r.log("finished %s %s (exit %s, %s tokens, $%.2f)" % (job.role, job.tid, job.returncode, tok, cost))
+
+
+def git_ident(wt):
+    return [] if git(wt, "config", "user.email", check=False) else ["-c", "user.name=coordinator", "-c", "user.email=coordinator@localhost"]
 
 
 def commit_all(wt, msg, paths=("-A",)):
@@ -1058,85 +1404,278 @@ def commit_all(wt, msg, paths=("-A",)):
     merging = (Path(git(wt, "rev-parse", "--absolute-git-dir")) / "MERGE_HEAD").exists()
     if not git(wt, "status", "--porcelain") and not merging:
         return False
-    ident = [] if git(wt, "config", "user.email", check=False) else ["-c", "user.name=coordinator", "-c", "user.email=coordinator@localhost"]
-    run(["git", *ident, "commit", "--no-verify", "-m", msg], cwd=wt)
+    run(["git", *git_ident(wt), "commit", "--no-verify", "-m", msg], cwd=wt)
     return True
 
 
 def add_fix(r, parent, kind, detail):
+    """A task that repairs a merge (kind merge), the gate after a merge (gate), or the base branch coming in (base)."""
     with r.edit() as d:
-        p = find(d, parent)
-        p["merge_state"] = "fixing"
-        fid, n = "%s-%s" % (parent, kind), 2
+        p = find(d, parent) if parent else None
+        if p:
+            p["merge_state"] = "gate-red" if kind == "gate" else "fixing"
+        stem = parent or "B"
+        fid, n = "%s-%s" % (stem, kind), 2
         while any(t["id"] == fid for t in d["tasks"]):
-            fid, n = "%s-%s%d" % (parent, kind, n), n + 1
-        title = ("Resolve the merge of %s into the run branch" if kind == "merge" else "Fix the gate after merging %s") % parent
-        t = new_task(fid, title, "merge" if kind == "merge" else "build", files=p["files"], size="S",
-                     model=p.get("model", ""), effort=p.get("effort", ""))
-        t["parent"] = parent
+            fid, n = "%s-%s%d" % (stem, kind, n), n + 1
+        title = {"merge": "Resolve the merge of %s into the run branch" % parent,
+                 "gate": "Fix the gate after merging %s" % parent,
+                 "base": "Bring the base branch's new commits into the run branch"}[kind]
+        t = new_task(fid, title, "merge" if kind in ("merge", "base") else "build", files=p["files"] if p else [],
+                     size="S", model=p.get("model", "") if p else "", effort=p.get("effort", "") if p else "")
+        t["parent"], t["fix_kind"] = parent, kind
         d["tasks"].append(t)
-        branch = d["branch"]
+        branch, base = d["branch"], d["base"]
     kd = r.task_dir(fid)
     kd.mkdir(parents=True, exist_ok=True)
-    pk = r.task_dir(parent)
+    pk = r.task_dir(parent) if parent else None
     if kind == "merge":
         body = ("Task %s could not be merged into the run branch `%s` automatically.\n\n"
                 "In your worktree (a branch made from the run branch) run `git merge --no-commit %s`, resolve every "
-                "conflict keeping the intent of both sides, then run the gate. Don't commit: the scheduler does.\n\n"
+                "conflict keeping the intent of both sides, then run the check. Don't commit: the scheduler does.\n\n"
                 "The parent task's brief: %s\nIts changes: %s\n\n%s\n"
                 % (parent, branch, r.task_branch(parent), pk / "knowledge.md", pk / "changes.md", detail))
+    elif kind == "base":
+        body = ("The base branch moved while this run worked, and `%s` no longer merges cleanly into the run branch "
+                "`%s`.\n\nIn your worktree (a branch made from the run branch) run `git merge --no-commit %s`, "
+                "resolve every conflict keeping the intent of both sides, then run the check. Don't commit: the "
+                "scheduler does.\n\n%s\n" % (detail[0], branch, detail[0], detail[1]))
     else:
         body = ("After task %s was merged into the run branch `%s`, the gate fails. Your worktree is made from the "
                 "run branch, so it already holds %s's changes. Make the gate pass with the smallest correct fix.\n\n"
-                "The parent task's brief: %s\nIts changes: %s\n\nGate output (tail):\n\n```\n%s\n```\n"
-                % (parent, branch, parent, pk / "knowledge.md", pk / "changes.md", detail))
+                "If the failing checks have nothing to do with this run's changes (`git diff %s --stat` shows what "
+                "the run changed), change no code: write in changes.md what fails and why it isn't this run's, and "
+                "run `coord task done`. The scheduler then records it for the owner and carries on.\n\n"
+                "The parent task's brief: %s\nIts changes: %s\n\nGate output, the error lines:\n\n```\n%s\n```\n"
+                % (parent, branch, parent, base, pk / "knowledge.md", pk / "changes.md", detail))
     (kd / "knowledge.md").write_text("# %s - %s\n\n%s" % (fid, title, body))
     r.log("added %s" % fid)
+    return fid
+
+
+def run_gate(r, runwt, logf):
+    cwd = runwt / r.cfg.get("gate_cwd", ".")
+    t0 = time.time()
+    with open(logf, "w") as f:
+        if r.cfg.get("pre_gate"):
+            args, shell = sh(r.cfg["pre_gate"])
+            subprocess.run(args, shell=shell, cwd=str(cwd), stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+            f.write("\n")
+            f.flush()
+        args, shell = sh(r.cfg["gate"])
+        ok = subprocess.run(args, shell=shell, cwd=str(cwd), stdout=f, stderr=subprocess.STDOUT,
+                            stdin=subprocess.DEVNULL).returncode == 0
+    return ok, time.time() - t0
+
+
+def sync_base(r, data, runwt):
+    """Merge the base branch's new commits into the run branch after a task lands, so conflicts show up early and
+    small. Returns (target, output) when it conflicts; the merge is then undone."""
+    if not r.cfg.get("sync_base", True) or any(t.get("fix_kind") == "base" and t["status"] not in ("done", "skipped")
+                                                for t in data["tasks"]):
+        return None
+    target = data["base"]
+    if r.cfg.get("push") and run(["git", "remote", "get-url", "origin"], cwd=r.project, check=False).returncode == 0 \
+            and run(["git", "fetch", "origin", data["base"]], cwd=r.project, check=False).returncode == 0:
+        target = "origin/%s" % data["base"]
+    if run(["git", "merge-base", "--is-ancestor", target, "HEAD"], cwd=runwt, check=False).returncode == 0:
+        return None
+    res = run(["git", *git_ident(runwt), "merge", "--no-edit", "--no-verify", target], cwd=runwt, check=False)
+    if res.returncode:
+        run(["git", "merge", "--abort"], cwd=runwt, check=False)
+        return target, (res.stdout + res.stderr).strip()[-1500:]
+    r.log("merged %s into the run branch" % target)
+    return None
 
 
 def integrate(r, tid):
     data = r.load()
     t = find(data, tid)
     wt = r.wt(tid)
-    runwt = ensure_run_wt(r, data)
-    if wt.exists():
-        commit_all(wt, t["title"])
-    res = run(["git", "merge", "--squash", r.task_branch(tid)], cwd=runwt, check=False)
-    if res.returncode:
-        run(["git", "reset", "--hard", "HEAD"], cwd=runwt, check=False)
-        add_fix(r, tid, "merge", (res.stdout + res.stderr).strip()[-1500:])
-        return
-    commit_all(runwt, t["title"])
-    ok, logf = True, None
+    kind = t.get("fix_kind", "")
+    with GIT_LOCK:
+        runwt = ensure_run_wt(r, data)
+        if wt.exists():
+            commit_all(wt, t["title"])
+        if kind == "base":
+            res = run(["git", *git_ident(runwt), "merge", "--no-ff", "--no-edit", "--no-verify", r.task_branch(tid)],
+                      cwd=runwt, check=False)
+        else:
+            res = run(["git", "merge", "--squash", r.task_branch(tid)], cwd=runwt, check=False)
+        if res.returncode:
+            run(["git", "merge", "--abort"], cwd=runwt, check=False)
+            run(["git", "reset", "--hard", "HEAD"], cwd=runwt, check=False)
+            if t.get("parent") and kind == "merge":
+                with r.edit() as d:
+                    find(d, tid).update(status="waiting_on_you", question_kind="stalled",
+                                        question="The merge fix %s still doesn't merge into the run branch: %s"
+                                                 % (tid, (res.stdout + res.stderr).strip()[-300:]))
+                return
+            add_fix(r, tid, "merge", (res.stdout + res.stderr).strip()[-1500:])
+            return
+        empty = kind != "base" and run(["git", "diff", "--cached", "--quiet"], cwd=runwt, check=False).returncode == 0
+        if kind != "base":
+            commit_all(runwt, t["title"])
+        conflict = sync_base(r, data, runwt)
+    if conflict:
+        add_fix(r, "", "base", conflict)
+    ok, known, flaky, secs, sig, logf, text = True, False, False, 0.0, set(), None, ""
     if r.cfg.get("gate"):
         logf = r.brain / "logs" / ("gate-%s.log" % tid)
-        with open(logf, "w") as f:
-            args, shell = sh(r.cfg["gate"])
-            ok = subprocess.run(args, shell=shell, cwd=str(runwt / r.cfg.get("gate_cwd", ".")),
-                                stdout=f, stderr=subprocess.STDOUT).returncode == 0
+        ok, secs = run_gate(r, runwt, logf)
+        for _ in range(int(r.cfg.get("gate_retries", 1)) if not ok else 0):
+            ok, more = run_gate(r, runwt, logf)
+            secs += more
+            flaky = ok
+            if ok:
+                r.log("gate flaky after %s: it failed, then passed on the re-run" % tid)
+        if not ok:
+            text = logf.read_text(errors="replace")
+            sig = gate_signature(text)
+            if data.get("gate_known") and sig and sig <= set(data["gate_known"]):
+                ok = known = True
+                r.log("gate after %s fails only with the failure already recorded for the owner" % tid)
+            elif t.get("gate_override"):
+                ok = True
+                r.log("gate after %s fails; the owner accepted it" % tid)
+    parent = find(data, t["parent"]) if t.get("parent") else None
+    outside = False
     if not ok:
-        add_fix(r, tid, "gate", "\n".join(logf.read_text().splitlines()[-60:]))
-        return
+        excerpt = gate_excerpt(text) + "\n\nFull log: %s" % logf
+        if parent and parent.get("merge_state") == "gate-red":
+            if empty:
+                outside = True  # the fixer found nothing of this run's to fix
+            else:
+                with r.edit() as d:
+                    d.setdefault("gates", []).append(dict(task=tid, seconds=round(secs), ok=False, flaky=False, known=False))
+                    find(d, tid).update(status="waiting_on_you", question_kind="gate",
+                                        question="The gate still fails after %s's fix (log: %s). Retry it, accept it "
+                                                 "(it merges with the gate red), or reply with guidance." % (t["parent"], logf))
+                return
+        else:
+            with r.edit() as d:
+                d.setdefault("gates", []).append(dict(task=tid, seconds=round(secs), ok=False, flaky=False, known=False))
+            add_fix(r, tid, "gate", excerpt)
+            return
+    fid, rest = "", ""
     with r.edit() as d:
+        d.setdefault("gates", []).append(dict(task=tid, seconds=round(secs), ok=ok and not outside, flaky=flaky,
+                                              known=known or outside))
+        if outside:
+            d["gate_known"] = sorted(set(d.get("gate_known") or []) | sig)
+            todos = d.setdefault("todos", [])
+            todos.append({"n": max([x["n"] for x in todos] or [0]) + 1, "task": tid, "at": now(), "done": False,
+                          "text": "The gate fails for reasons this run didn't cause (see %s and %s); the run carried on "
+                                  "with it red." % (logf, r.task_dir(tid) / "changes.md")})
         tt = find(d, tid)
         tt["merged"], tt["merge_state"] = True, ""
-        if tt.get("parent"):
-            p = find(d, tt["parent"])
-            p["merged"], p["merge_state"] = True, ""
-    if wt.exists():
-        run(["git", "worktree", "remove", "--force", wt], cwd=r.project, check=False)
-    r.log("merged %s" % tid)
-    # The run branch holds the work now. A fix task's parents kept their worktrees and branches until the fix merged
-    chain = [tid]
-    while find(data, chain[-1]).get("parent") and len(chain) <= len(data["tasks"]):
-        chain.append(find(data, chain[-1])["parent"])
-    for done in chain:
-        if done != tid and r.wt(done).exists():
-            run(["git", "worktree", "remove", "--force", r.wt(done)], cwd=r.project, check=False)
-        res = run(["git", "branch", "-D", r.task_branch(done)], cwd=r.project, check=False)
-        r.log("deleted the branch %s" % r.task_branch(done) if res.returncode == 0 else
-              "could not delete the branch %s: %s" % (r.task_branch(done), (res.stderr or res.stdout).strip()[-200:]))
+        cur, seen = tt, set()
+        while cur.get("parent") and cur["parent"] not in seen:
+            seen.add(cur["parent"])
+            cur = find(d, cur["parent"])
+            cur["merged"], cur["merge_state"] = True, ""
+        rest = (tt.get("rest") or "").strip() if tt["type"] == "build" else ""
+        if rest:
+            fid = next_id(d)
+            nt = new_task(fid, "Finish: %s" % tt["title"], "build", [tid], tt["files"], tt["size"], tt.get("model", ""),
+                          tt.get("effort", ""))
+            nt.update(tests=tt.get("tests", False), ui=tt.get("ui", False), external=tt.get("external") or [])
+            d["tasks"].append(nt)
+            tt["rest"] = ""
+            title = tt["title"]
+    if rest:
+        r.task_dir(fid).mkdir(parents=True, exist_ok=True)
+        (r.task_dir(fid) / "knowledge.md").write_text(
+            "# %s - Finish: %s\n\nTask %s ran past its time box and left this part for a follow-on task.\n\n"
+            "## What is left\n\n%s\n\n## Read first\n\n- %s - the brief this continues\n- %s - what %s did\n" % (
+                fid, title, tid, rest, r.task_dir(tid) / "knowledge.md", r.task_dir(tid) / "changes.md", tid))
+        r.log("queued %s for what %s left" % (fid, tid))
+    with GIT_LOCK:
+        if wt.exists():
+            run(["git", "worktree", "remove", "--force", wt], cwd=r.project, check=False)
+        r.log("merged %s" % tid)
+        chain = [tid]
+        while find(data, chain[-1]).get("parent") and len(chain) <= len(data["tasks"]):
+            chain.append(find(data, chain[-1])["parent"])
+        for done in chain:
+            if done != tid and r.wt(done).exists():
+                run(["git", "worktree", "remove", "--force", r.wt(done)], cwd=r.project, check=False)
+            res = run(["git", "branch", "-D", r.task_branch(done)], cwd=r.project, check=False)
+            r.log("deleted the branch %s" % r.task_branch(done) if res.returncode == 0 else
+                  "could not delete the branch %s: %s" % (r.task_branch(done), (res.stderr or res.stdout).strip()[-200:]))
     sync_pr(r)
+
+
+class Integrator(threading.Thread):
+    """Merges finished tasks and runs the gate one at a time, off the scheduler's loop, so agents keep starting and
+    finishing while a long gate runs."""
+
+    def __init__(self, r):
+        super().__init__(daemon=True)
+        self.r, self.busy, self.lock = r, set(), threading.Lock()
+        self.queue = []
+        self.wake = threading.Event()
+
+    def submit(self, tid):
+        with self.lock:
+            if tid in self.busy:
+                return
+            self.busy.add(tid)
+            self.queue.append(tid)
+        self.wake.set()
+
+    def idle(self):
+        with self.lock:
+            return not self.busy
+
+    def run(self):
+        while True:
+            self.wake.wait()
+            with self.lock:
+                tid = self.queue.pop(0) if self.queue else None
+                if not self.queue:
+                    self.wake.clear()
+            if tid is None:
+                continue
+            try:
+                with self.r.edit() as d:
+                    find(d, tid)["merge_state"] = "merging"
+                integrate(self.r, tid)
+            except Exception as e:
+                self.r.log("integrate %s failed: %r" % (tid, e))
+                with self.r.edit() as d:
+                    find(d, tid).update(status="waiting_on_you", question_kind="stalled",
+                                        question="Merging %s into the run branch failed: %s" % (tid, e))
+            finally:
+                try:
+                    with self.r.edit() as d:
+                        tt = find(d, tid)
+                        if tt.get("merge_state") == "merging":
+                            tt["merge_state"] = ""
+                except Exception as e:
+                    self.r.log("could not reset %s after merging: %r" % (tid, e))
+                with self.lock:
+                    self.busy.discard(tid)
+            self.r.poke()
+
+
+def request_title(request, n=72):
+    first = re.split(r"(?<=[.!?])\s|\n", (request or "").strip(), maxsplit=1)[0].strip().rstrip(".")
+    if len(first) <= n:
+        return first
+    return first[:n].rsplit(" ", 1)[0].rstrip(",;:") + "..."
+
+
+def written_pr(r):
+    """(title, body) of pr.md; the title is its first line when that is a `# ` heading."""
+    p = r.dir / "pr.md"
+    if not nonempty(p):
+        return "", ""
+    text = p.read_text().strip()
+    first, _, rest = text.partition("\n")
+    if first.startswith("# "):
+        return first[2:].strip(), rest.strip()
+    return "", text
 
 
 def plan_title(r, data):
@@ -1145,7 +1684,7 @@ def plan_title(r, data):
         for line in plan.read_text().splitlines():
             if line.startswith("# "):
                 return line[2:].strip()
-    return data["name"]
+    return data.get("title") or request_title(data.get("request")) or data["name"]
 
 
 def plan_section(r, heading):
@@ -1159,10 +1698,10 @@ def merged_ids(data):
 
 
 def queue_writer(r):
-    # Once every task has merged, a writer describes the change for its reviewers
+    # Once every task has merged, a writer describes the change for its reviewers. A quick run's builder writes it.
     data = r.load()
     ids = merged_ids(data)
-    if data.get("mode") != "build" or data["status"] == "paused" or not data.get("pr_url") or not ids \
+    if data.get("quick") or data.get("mode") != "build" or data["status"] == "paused" or not data.get("pr_url") or not ids \
             or data.get("described") == ids or any(t["status"] in OPEN + ("waiting_on_you",) for t in data["tasks"]) \
             or any(t["type"] in WORK and t["status"] == "done" and not t.get("merged") for t in data["tasks"]):
         return
@@ -1181,17 +1720,39 @@ def queue_writer(r):
 
 
 def pr_body(r, data):
-    # The writer's description once every task has merged; until then the goal and what is merged so far
-    written = r.dir / "pr.md"
-    if data["status"] == "finished" and data.get("described") == merged_ids(data) and nonempty(written):
-        out = [written.read_text().strip(), ""]
+    # The written description once every task has merged; until then the goal and what is merged so far
+    _, written = written_pr(r)
+    done = data.get("quick") or data.get("described") == merged_ids(data)
+    if data["status"] == "finished" and done and written:
+        out = [written, ""]
     else:
         tasks = [t for t in data["tasks"] if t["type"] in WORK and not t.get("parent") and t["status"] != "skipped"]
-        goal = plan_section(r, "Goal")
+        goal = plan_section(r, "Goal") or (data.get("request", "").strip() if data.get("quick") else "")
         out = ([goal, ""] if goal else []) + ["Work in progress: %d of %d merged." % (
             sum(1 for t in tasks if t.get("merged")), len(tasks)), ""]
         out += ["- [%s] %s" % ("x" if t.get("merged") else " ", t["title"]) for t in tasks] + [""]
     return "\n".join(out).strip() + "\n"
+
+
+GH_REMOTE_RE = re.compile(r"^(?:\w+://)?(?:[^@/]+@)?([^/:]+)[:/](.+)$")
+
+
+def repo_slug(cwd):
+    """The `--repo` args for origin's GitHub repository: without it, an `upstream` remote makes `gh` target
+    upstream instead when there's no `gh repo set-default`."""
+    res = run(["git", "remote", "get-url", "origin"], cwd=cwd, check=False)
+    if res.returncode:
+        return []
+    m = GH_REMOTE_RE.match(res.stdout.strip())
+    if not m or "." not in m.group(1):
+        return []
+    path = m.group(2).rstrip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    parts = path.split("/")
+    if len(parts) != 2 or not all(parts):
+        return []
+    return ["--repo", "%s/%s" % (m.group(1), path)]
 
 
 def push_branch(r, branch):
@@ -1218,23 +1779,26 @@ def sync_pr(r, push=True):
         return
     if not r.cfg.get("pr") or not shutil.which("gh"):
         return
+    repo = repo_slug(r.project)
     body = r.brain / "pr-body.md"
     body.write_text(pr_body(r, data))
+    title, _ = written_pr(r)
+    retitle = ["--title", title] if title and data["status"] == "finished" else []
     if not push:
-        res = run(["gh", "pr", "edit", data["pr_url"], "--body-file", body], cwd=r.project, check=False)
+        res = run(["gh", "pr", "edit", data["pr_url"], *repo, "--body-file", body, *retitle], cwd=r.project, check=False)
         if res.returncode:
             r.log("pull request update failed: %s" % (res.stderr or res.stdout).strip()[-300:])
         return
-    view = run(["gh", "pr", "view", branch, "--json", "url,state"], cwd=r.project, check=False)
+    view = run(["gh", "pr", "view", branch, *repo, "--json", "url,state"], cwd=r.project, check=False)
     pr = json.loads(view.stdout) if view.returncode == 0 and view.stdout.strip() else {}
     if pr.get("state") == "MERGED":  # a merge right after the run finished: never open a second pull request
         return
     if pr.get("state") == "OPEN":
-        res = run(["gh", "pr", "edit", branch, "--body-file", body], cwd=r.project, check=False)
+        res = run(["gh", "pr", "edit", branch, *repo, "--body-file", body, *retitle], cwd=r.project, check=False)
         url = pr.get("url", "")
     else:
-        res = run(["gh", "pr", "create", "--draft", "--head", branch, "--base", data["base"],
-                   "--title", plan_title(r, data), "--body-file", body], cwd=r.project, check=False)
+        res = run(["gh", "pr", "create", "--draft", "--head", branch, "--base", data["base"], *repo,
+                   "--title", title or plan_title(r, data), "--body-file", body], cwd=r.project, check=False)
         url = (res.stdout.strip().splitlines() or [""])[-1] if res.returncode == 0 else ""
     if res.returncode:
         r.log("pull request update failed: %s" % (res.stderr or res.stdout).strip()[-300:])
@@ -1255,11 +1819,11 @@ def open_pr(r, data):
     if not shutil.which("gh"):
         r.log("pull request skipped: gh is not on PATH")
         return
-    wt = ensure_run_wt(r, data)
-    msg = "Start %s." % plan_title(r, data).rstrip(".")
-    if msg not in git(wt, "log", "--format=%s", "%s..HEAD" % data["base"]).splitlines():
-        ident = [] if git(wt, "config", "user.email", check=False) else ["-c", "user.name=coordinator", "-c", "user.email=coordinator@localhost"]
-        run(["git", *ident, "commit", "--allow-empty", "--no-verify", "-m", msg], cwd=wt)
+    with GIT_LOCK:
+        wt = ensure_run_wt(r, data)
+        msg = "Start %s." % plan_title(r, data).rstrip(".")
+        if msg not in git(wt, "log", "--format=%s", "%s..HEAD" % data["base"]).splitlines():
+            run(["git", *git_ident(wt), "commit", "--allow-empty", "--no-verify", "-m", msg], cwd=wt)
     sync_pr(r)
 
 
@@ -1275,13 +1839,14 @@ def next_jobs(r, data, jobs):
                 break
     out += [("work", t["id"]) for t in tasks if t["type"] in ("shots", "map", "pr") and t["status"] == "queue" and t["id"] not in busy]
     if data.get("plan_approved") and data.get("mode") == "build":
-        running = [by[x] for x in busy if x in by and by[x]["type"] in WORK]
+        # Only builds take build slots: an officer's audit of a task doesn't
+        running = [by[j.tid] for j in jobs.values() if j.kind == "work" and j.tid in by and by[j.tid]["type"] in WORK]
         slots = max(1, int(r.cfg["max_parallel"])) - len(running)
         for t in tasks:
             if slots <= 0:
                 break
-            if t["type"] in WORK and t["status"] == "queue" and t["id"] not in busy and deps_met(t, by) \
-                    and not any(overlap(t, b) for b in running):
+            if t["type"] in WORK and t["status"] == "queue" and t["id"] not in busy and not t.get("pending_approval") \
+                    and deps_met(t, by) and not any(overlap(t, b) for b in running):
                 out.append(("work", t["id"]))
                 running.append(t)
                 slots -= 1
@@ -1298,26 +1863,97 @@ def sleep_poke(r, secs):
             return
 
 
+def last_activity(job):
+    """When the agent's transcript, or one of its subagents' transcripts, last changed."""
+    if not getattr(job, "transcript", None) or not job.transcript.exists():
+        job.transcript = transcript(job.session) if job.session else None
+    if not job.transcript:
+        return 0
+    times = [job.transcript.stat().st_mtime]
+    sub = job.transcript.parent / job.transcript.stem / "subagents"
+    if sub.is_dir():
+        times += [p.stat().st_mtime for p in sub.glob("*.jsonl")]
+    return max(times)
+
+
+def watch(r, data, jobs):
+    """Zero-token supervision: stop agents that made no progress, nudge builders past their time box, answer agents'
+    questions with their defaults at the deadline, and let a full-auto run's plan additions start."""
+    nowt = time.time()
+    stall = float(r.cfg.get("stall_minutes") or 0) * 60
+    box = r.cfg.get("time_box") or {}
+    by = {t["id"]: t for t in data["tasks"]}
+    for job in jobs.values():
+        t = by.get(job.tid)
+        if not t or job.kind != "work":
+            continue
+        if stall and nowt - job.t0 > stall and nowt - getattr(job, "checked", 0) > 60 and not job.stalled:
+            job.checked = nowt
+            last = last_activity(job)
+            if last and nowt - last > stall:
+                job.stalled = True
+                r.log("%s made no progress for %d minutes; stopping its agent" % (job.tid, (nowt - last) // 60))
+                kill_group(job.pid)
+        limit = float(box.get(t.get("size"), 0) or 0) * 60 * 1.5
+        if job.role == "builder" and limit and not t.get("boxed") and t.get("minutes", 0) * 60 + nowt - job.t0 > limit:
+            with r.edit() as d:
+                tt = find(d, job.tid)
+                tt["boxed"] = True
+                tt["inbox"].append(
+                    "You have worked about %d minutes against a %d-minute time box for a size-%s task. Finish the part "
+                    "that is coherent now; record what is left with `coord task rest \"<what is left>\"` (it becomes a "
+                    "follow-on task), then write changes.md and finish as usual."
+                    % ((t.get("minutes", 0) * 60 + nowt - job.t0) // 60, box[t["size"]], t["size"]))
+            r.log("%s is past 1.5x its time box; told it to wrap up" % job.tid)
+    for t in data["tasks"]:
+        deadline = question_deadline(r, data, t)
+        if deadline and dt.datetime.now().astimezone() >= deadline:
+            with r.edit() as d:
+                tt = find(d, t["id"])
+                if tt["status"] != "waiting_on_you" or not tt.get("question_default"):
+                    continue
+                tt.update(answer=tt["question_default"], answered_by_default=True, status="queue", resume=True, attempts=0)
+                add_owner_note(d, "default", "No answer by the deadline, so %s's default applies: %s"
+                               % (tt["id"], tt["question_default"]), tt["id"])
+                d["status"] = derive_status(d)
+            r.log("%s: no answer by the deadline, so it goes on with its default" % t["id"])
+    if data.get("full_auto") and pending_changes(data) and not any(t["type"] == "plan" and t["status"] in OPEN
+                                                                    for t in data["tasks"]):
+        with r.edit() as d:
+            for t in pending_changes(d):
+                t["pending_approval"] = False
+        r.log("full auto: the plan's additions start without waiting")
+
+
 def cmd_scheduler(a):
     r = Run(a.project, a.run)
     (r.brain / "logs").mkdir(parents=True, exist_ok=True)
-    other = r.state().get("scheduler_pid")
-    if other and other != os.getpid() and alive(other):
+    hold = try_lock(r.brain / "scheduler.lock")  # one scheduler per run, even when two commands start one at once
+    if not hold:
         return
-    r.set_state(scheduler_pid=os.getpid(), agents={})
+    code = ROOT / "bin" / "coord"
+    stamp = code.stat().st_mtime
+    jobs = adopt_jobs(r)
+    r.set_state(scheduler_pid=os.getpid(), scheduler_start=proc_start(os.getpid()),
+                agents={k: j.record() for k, j in jobs.items()})
     write_agent_files(r)
     stop = []
     signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
+    adopted = {j.tid for j in jobs.values()}
     with r.edit() as d:
         for t in d["tasks"]:
-            if t["status"] in ("in_progress", "review"):
+            if t["status"] in ("in_progress", "review") and t["id"] not in adopted:
                 t["status"], t["resume"] = "queue", True
                 t["resume_msg"] = "Your session was interrupted. Check what is already done, then continue and finish the task."
-    jobs, announced, pr_sig, pr_tried = {}, None, None, False
-    r.log("scheduler up (pid %d)" % os.getpid())
+            if t.get("merge_state") == "merging":
+                t["merge_state"] = ""
+    integ = Integrator(r)
+    integ.start()
+    announced, pr_sig, pr_tried, handover = None, None, False, ""
+    r.log("scheduler up (pid %d%s)" % (os.getpid(), "; adopted %s" % ", ".join(sorted(adopted)) if adopted else ""))
     while not stop:
         for key, job in list(jobs.items()):
-            if job.p.poll() is not None:
+            if job.poll() is not None:
                 jobs.pop(key)
                 try:
                     finish_job(r, job)
@@ -1326,17 +1962,20 @@ def cmd_scheduler(a):
         data = r.load()
         if data.get("terminating"):
             break
+        if integ.idle() and ((r.brain / "restart").exists() or code.stat().st_mtime != stamp):
+            handover = "asked to restart" if (r.brain / "restart").exists() else "coord was updated"
+            break
         if data["status"] != "paused":
+            try:
+                watch(r, data, jobs)
+            except Exception as e:
+                r.log("watch failed: %r" % e)
+            data = r.load()
+            holding = any(t.get("merge_state") == "gate-red" for t in data["tasks"])
             for t in data["tasks"]:
-                if t["type"] in WORK and t["status"] == "done" and not t.get("merged") and t.get("merge_state") != "fixing":
-                    try:
-                        integrate(r, t["id"])
-                    except Exception as e:
-                        r.log("integrate %s failed: %r" % (t["id"], e))
-                        with r.edit() as d:
-                            tt = find(d, t["id"])
-                            tt.update(status="waiting_on_you", question_kind="stalled",
-                                      question="Merging %s into the run branch failed: %s" % (t["id"], e))
+                if t["type"] in WORK and t["status"] == "done" and not t.get("merged") \
+                        and t.get("merge_state") not in ("fixing", "gate-red", "merging") and (not holding or t.get("parent")):
+                    integ.submit(t["id"])
             try:
                 queue_writer(r)
             except Exception as e:
@@ -1361,7 +2000,7 @@ def cmd_scheduler(a):
                 except Exception as e:
                     r.log("opening the pull request failed: %r" % e)
         with r.edit() as d:
-            d["status"] = derive_status(d, bool(jobs))
+            d["status"] = derive_status(d, bool(jobs) or not integ.idle())
             status = d["status"]
             data = d
         if status != announced:
@@ -1369,12 +2008,15 @@ def cmd_scheduler(a):
             write_catalog(r.project)
             if status in WAIT_STATES and announced is not None:
                 notify("coord · %s" % r.name, summary(data))
+            if status == "finished":
+                try:
+                    record_metrics(r, data)
+                except Exception as e:
+                    r.log("recording the run's metrics failed: %r" % e)
             announced = status
-        r.set_state(agents={k: {"pid": j.p.pid, "task": j.tid, "role": j.role, "kind": j.kind,
-                                "since": dt.datetime.fromtimestamp(j.t0).astimezone().isoformat(timespec="seconds")}
-                            for k, j in jobs.items()})
+        r.set_state(agents={k: j.record() for k, j in jobs.items()})
         sig = [status] + [(t["id"], t["status"], bool(t.get("merged"))) for t in data["tasks"]]
-        stopping = not jobs and status in ("finished", "planned", "paused")
+        stopping = not jobs and integ.idle() and status in ("finished", "planned", "paused")
         try:
             if stopping and status == "finished":
                 sync_pr(r)
@@ -1386,15 +2028,23 @@ def cmd_scheduler(a):
         if stopping:
             break
         sleep_poke(r, 2.0)
+    if handover:
+        # The agents keep running; the new scheduler adopts them by pid and start time
+        r.log("handing over to a new scheduler: %s" % handover)
+        r.set_state(scheduler_pid=0, scheduler_start="", agents={k: j.record() for k, j in jobs.items()})
+        (r.brain / "restart").unlink(missing_ok=True)
+        hold.close()
+        start_daemon(r, "scheduler")
+        return
     for job in jobs.values():
-        kill_group(job.p.pid)
-    r.set_state(scheduler_pid=0, agents={})
+        kill_group(job.pid)
+    r.set_state(scheduler_pid=0, scheduler_start="", agents={})
     r.log("scheduler down")
+    hold.close()
 
 
 def start_daemon(r, which):
-    key = "%s_pid" % which
-    if alive(r.state().get(key)):
+    if r.alive(which):
         return False
     (r.brain / "logs").mkdir(parents=True, exist_ok=True)
     log = open(r.brain / "logs" / ("%s.out" % which), "a")
@@ -1403,7 +2053,7 @@ def start_daemon(r, which):
     log.close()
     if which == "viewer":
         for _ in range(40):
-            if alive(r.state().get("viewer_pid")) and r.state().get("viewer_port"):
+            if r.alive("viewer") and r.state().get("viewer_port"):
                 break
             time.sleep(0.1)
     return True
@@ -1428,34 +2078,59 @@ def cmd_start(a):
     request = request[tag.end():] if tag else request
     if not request.strip():
         raise Fail("empty request")
+    if a.quick and a.plan_only:
+        raise Fail("a quick run builds at once; it can't be plan-only")
     name = slug(a.name or " ".join(request.split()[:6]))
     r = Run(project, name)
     if r.tasks_file.exists():
         raise Fail("a coordinator named %r already exists here; pick another name, or `coord resume %s`" % (name, name))
-    if not shutil.which(r.cfg["claude"]):
+    if not claude_found(r.cfg):
         raise Fail("`%s` is not on PATH" % r.cfg["claude"])
+    if not a.skip_selftest:
+        ok, why = selftest(r.cfg, cached=True)
+        if not ok:
+            raise Fail("Claude Code can't start Coordinator's agents on this machine (%s). `coord selftest` shows the "
+                       "details." % why)
     ensure_store(project)
     base = r.cfg["base_branch"] or git(project, "rev-parse", "--abbrev-ref", "HEAD")
     data = {"name": name, "request": request.strip(), "mode": "plan" if a.plan_only else "build",
             "status": "planning", "plan_approved": False, "base": base, "branch": a.branch or "coord/%s" % name,
-            "full_auto": full_auto, "created": now(), "updated": now(), "tasks": [new_task("T0", "Plan the work", "plan")]}
+            "full_auto": full_auto, "created": now(), "updated": now(), "version": coord_version(), "tasks": []}
+    if a.quick:
+        title = request_title(request)
+        t = new_task("T1", title, "build", size=a.size or "M", model=a.model or "", effort=a.effort or "")
+        t.update(tests=a.tests == "on", ui=a.ui == "on")
+        data.update(quick=True, plan_approved=True, status="running", title=title, tasks=[t])
+    else:
+        plan = new_task("T0", "Plan the work", "plan", model=a.model or "", effort=a.effort or "")
+        data["tasks"] = [plan]
     if not a.plan_only:
         ensure_branch(r, data)
-    (r.task_dir("T0")).mkdir(parents=True)
+    first = data["tasks"][0]["id"]
+    r.task_dir(first).mkdir(parents=True)
     write_json(r.tasks_file, data)
     if not a.plan_only and r.cfg.get("push"):
         push_branch(r, data["branch"])
-    (r.task_dir("T0") / "knowledge.md").write_text(
-        "# T0 - Plan the work\n\n## The owner's request, word for word\n\n%s\n\n## Mode\n\n%s\n" % (
-            request.strip(), "Plan only: goals, milestones and tasks that later runs will build."
-            if a.plan_only else "Build: the owner approves your plan, then the tasks are built."))
+    if a.quick:
+        (r.task_dir(first) / "knowledge.md").write_text(
+            "# T1 - %s\n\n## The owner's words\n\n%s\n\n## Quick run\n\nThere is no planner and no plan: this brief "
+            "is the owner's request. Find the code it touches, state your intent with `coord task intent` before "
+            "your first edit, then build exactly what the words ask for.\n\n## Done when\n\n- Everything the owner's "
+            "words ask for is done and works, and nothing they didn't ask for is.\n- The check passes, and the "
+            "reviewer's must-fix findings are fixed.\n" % (data["title"], request.strip()))
+    else:
+        (r.task_dir("T0") / "knowledge.md").write_text(
+            "# T0 - Plan the work\n\n## The owner's request, word for word\n\n%s\n\n## Mode\n\n%s\n" % (
+                request.strip(), "Plan only: goals, milestones and tasks that later runs will build."
+                if a.plan_only else "Build: the owner approves your plan, then the tasks are built."))
     write_catalog(project)
     start_daemon(r, "scheduler")
     start_daemon(r, "viewer")
     url = viewer_url(r)
     if url and not a.no_open:
         open_url(url)
-    print("started %s - planning. Live page: %s" % (name, url or "(viewer failed to start)"))
+    print("started %s - %s. Live page: %s" % (name, "building (quick run)" if a.quick else "planning",
+                                               url or "(viewer failed to start)"))
     if full_auto:  # its own line: start_followups reads the line above
         print("full auto: on - /coordinate decides for you, merges when the run is done and ends it")
 
@@ -1484,11 +2159,29 @@ def cmd_status(a):
     url = viewer_url(r)
     if url and not a.no_open:
         open_url(url)
-    print(summary(data, alive(r.state().get("scheduler_pid"))) + (" · %s" % url if url else ""))
+    print(summary(data, r.alive("scheduler")) + (" · %s" % url if url else ""))
+
+
+def run_overlaps(r, data):
+    """Other open runs of this project whose tasks may change the same files as this run's."""
+    mine = [t for t in data["tasks"] if t["type"] in WORK and t["status"] not in ("done", "skipped")]
+    out = []
+    for other in list_runs(r.project):
+        if other.name == r.name:
+            continue
+        od = read_json(other.tasks_file) or {}
+        if od.get("status") in ("finished", "planned") or od.get("mode") != "build":
+            continue
+        theirs = [t for t in od.get("tasks", []) if t.get("type") in WORK and t.get("status") not in ("skipped",)
+                  and not t.get("merged") and t.get("files")]
+        hits = sorted({f for a in mine for b in theirs if a.get("files") and overlap(a, b) for f in b["files"]})
+        if hits:
+            out.append({"run": other.name, "files": hits[:8]})
+    return out
 
 
 def print_status_text(r, data):
-    print(summary(data, alive(r.state().get("scheduler_pid"))))
+    print(summary(data, r.alive("scheduler")))
     url = viewer_url(r)
     if url:
         print("live page: %s" % url)
@@ -1518,6 +2211,15 @@ def print_status_text(r, data):
                 print("  %s %s [%s, %s/%s%s] after: %s" % (t["id"], t["title"], t["size"], t.get("model") or "default",
                                                          t.get("effort") or "default", ", tests on" if t.get("tests") else "",
                                                          ", ".join(t["depends_on"]) or "-"))
+        n, depth = critical_path(data)
+        if n:
+            print("SHAPE: %d task%s, up to %d at once, %d after one another at most"
+                  % (n, "s" if n != 1 else "", min(n, int(r.cfg["max_parallel"])), depth))
+        audits = sorted(r.dir.glob("plan-audit-*.md"))
+        if audits:
+            print("OFFICER'S REPORT: %s" % audits[-1])
+        for o in run_overlaps(r, data):
+            print("OVERLAPS WITH OPEN RUN %s: %s" % (o["run"], ", ".join(o["files"])))
         if data.get("followups"):
             print("FOLLOW-UP RUNS:")
             for f in data["followups"]:
@@ -1525,6 +2227,9 @@ def print_status_text(r, data):
     elif data.get("plan_approved"):
         for f in data.get("followups") or []:
             print("FOLLOW-UP %s: %s" % (f.get("run") or f["name"], followup_line(data, f)))
+        for t in data["tasks"]:
+            if t.get("intent") and t["status"] not in ("done", "skipped"):
+                print("%s INTENT: %s" % (t["id"], t["intent"]))
     if (data.get("design") or {}).get("choice"):
         print("DESIGN LANGUAGE: %s" % design_line(data))
     # Once finished, the pull request and the outside files are in the list above. A family's lines also show each
@@ -1567,9 +2272,9 @@ def cmd_wait(a):
                 (data["status"] != status if a.new else data["status"] in WAIT_STATES):
             break
         seen &= now_keys  # an item settled and then asked again is new
-        if not alive(r.state().get("scheduler_pid")):
+        if not r.alive("scheduler"):
             time.sleep(3)
-            if not alive(r.state().get("scheduler_pid")) and r.load()["status"] not in WAIT_STATES:
+            if not r.alive("scheduler") and r.load()["status"] not in WAIT_STATES:
                 break
         time.sleep(4)
     print_status_text(r, r.load())
@@ -1590,7 +2295,13 @@ def do_approve(r, note=""):
             raise Fail("the plan is not ready yet")
         if note:
             add_owner_note(d, "answer", note)
+        was = d.get("plan_approved")
         d["plan_approved"] = True
+        changes = pending_changes(d)
+        for t in changes:
+            t["pending_approval"] = False
+        if was and not changes:
+            raise Fail("nothing waits for your approval")
         d["status"] = derive_status(d)
     r.poke()
     start_daemon(r, "scheduler")
@@ -1655,7 +2366,7 @@ def start_followups(r):
             p = subprocess.run(coord_argv() + ["start", "--name", name, "--request-file",
                                 str(req), "--no-open"] + auto, cwd=f["repo"], env=env, text=True, capture_output=True,
                                stdin=subprocess.DEVNULL, timeout=300)
-            m = re.search(r"^started (\S+) - planning\. Live page: (\S+)", p.stdout, re.M)
+            m = re.search(r"^started (\S+) - [^.]*\. Live page: (\S+)", p.stdout, re.M)
             if p.returncode or not m:
                 raise Fail((p.stderr or p.stdout).strip()[-300:] or "coord start exited with %d" % p.returncode)
             f.update(status="started", run=m.group(1), url=m.group(2) if m.group(2).startswith("http") else "", error="")
@@ -1682,10 +2393,11 @@ def do_answer(r, tid, text):
         t = find(d, tid)
         if t["status"] != "waiting_on_you":
             raise Fail("%s is not waiting for an answer" % tid)
-        t.update(answer=text, status="queue", resume=True, attempts=0)
+        t.update(answer=text, status="queue", resume=True, attempts=0, answered_by_default=False)
         add_owner_note(d, "answer", text, tid)
         if t.get("question_kind") == "officer":
             t["audit_round"] = 0
+
         d["status"] = derive_status(d)
     r.poke()
     start_daemon(r, "scheduler")
@@ -1696,6 +2408,8 @@ def do_accept(r, tid):
         t = find(d, tid)
         if t["status"] not in ("waiting_on_you", "audit"):
             raise Fail("%s has nothing to accept" % tid)
+        if t.get("question_kind") == "gate":
+            t["gate_override"] = True  # merge it with the gate red, as the owner said
         t.update(status="done", question="", question_kind="")
         d["status"] = derive_status(d)
     r.poke()
@@ -1764,6 +2478,35 @@ def do_resume(r):
     start_daemon(r, "viewer")
 
 
+def do_tell(r, tid, text):
+    with r.edit() as d:
+        t = find(d, tid)
+        live = t["status"] in ("in_progress", "review")
+        if live:
+            t["inbox"].append(text)
+        add_owner_note(d, "note", text, tid)
+    if not live:
+        with open(r.task_dir(tid) / "knowledge.md", "a") as f:
+            f.write("\n## Note from the owner (%s)\n\n%s\n" % (now()[:16], text))
+    r.poke()
+    return "delivered to %s at its next step" % tid if live else "added to %s's brief" % tid
+
+
+def do_restart(r):
+    """A new scheduler that adopts the running agents: picks up a changed `coord` without stopping any work."""
+    if r.alive("scheduler"):
+        r.brain.mkdir(parents=True, exist_ok=True)
+        (r.brain / "restart").write_text(now())
+        r.poke()
+        for _ in range(150):
+            time.sleep(0.2)
+            if not (r.brain / "restart").exists():
+                break
+        return "restarted the scheduler of %s; running agents kept going" % r.name
+    start_daemon(r, "scheduler")
+    return "started the scheduler of %s" % r.name
+
+
 def cmd_simple(a):
     r = pick_run(a.run)
     if a.cmd == "approve":
@@ -1783,6 +2526,8 @@ def cmd_simple(a):
     elif a.cmd == "resume":
         do_resume(r)
         print("resumed %s · %s" % (r.name, viewer_url(r)))
+    elif a.cmd == "restart":
+        print(do_restart(r))
     elif a.cmd == "run":
         with r.edit() as d:
             d["mode"] = "build"
@@ -1806,50 +2551,99 @@ def cmd_simple(a):
             d["status"] = derive_status(d)
         for job in (r.state().get("agents") or {}).values():
             if job.get("task") == a.task:
-                kill_group(job.get("pid"))
+                kill_group(job.get("pid"), start=job.get("start", ""))
         r.poke()
         print("stopped %s" % a.task)
     elif a.cmd == "tell":
-        text = " ".join(a.text)
-        with r.edit() as d:
-            t = find(d, a.task)
-            live = t["status"] in ("in_progress", "review")
-            if live:
-                t["inbox"].append(text)
-            add_owner_note(d, "note", text, a.task)
-        if not live:
-            with open(r.task_dir(a.task) / "knowledge.md", "a") as f:
-                f.write("\n## Note from the owner (%s)\n\n%s\n" % (now()[:16], text))
-        print("delivered to %s at its next step" % a.task if live else "added to %s's brief" % a.task)
+        print(do_tell(r, a.task, " ".join(a.text)))
 
 
 def do_add(r, text):
+    """More work or a change to the plan. Before approval the planner revises the plan; once building, the work
+    already approved keeps going while the planner fits the addition in, and only the new tasks wait for approval."""
+    data = r.load()
+    if data.get("quick"):
+        open_ = [t for t in data["tasks"] if t["type"] == "build" and t["status"] in OPEN]
+        if open_:
+            return do_tell(r, open_[-1]["id"], text)
+        with r.edit() as d:
+            add_owner_note(d, "addition", text)
+            tid = next_id(d)
+            last = [t["id"] for t in d["tasks"] if t["type"] == "build" and not t.get("parent")][-1:]
+            d["tasks"].append(new_task(tid, request_title(text), "build", last, size="S"))
+            d["status"] = derive_status(d)
+        r.task_dir(tid).mkdir(parents=True, exist_ok=True)
+        (r.task_dir(tid) / "knowledge.md").write_text(
+            "# %s - %s\n\n## The owner's words\n\n%s\n\n## Quick run\n\nThe owner added this after the first "
+            "change. State your intent with `coord task intent` before your first edit, then build exactly this.\n"
+            % (tid, request_title(text), text))
+        r.poke()
+        start_daemon(r, "scheduler")
+        return "added %s for it; it starts now" % tid
     with r.edit() as d:
         add_owner_note(d, "addition", text)
-        planner = next((t for t in d["tasks"] if t["type"] == "plan" and session_exists(t.get("session"))), None)
+        building = d.get("plan_approved") and d.get("mode") == "build"
+        planner = next((t for t in reversed(d["tasks"]) if t["type"] == "plan" and session_exists(t.get("session"))), None)
+        how = ("The owner adds this while the run builds: \"%s\". Tasks that are running or done stay as they are. "
+               "Add tasks for it (they start once the owner approves them) or change the briefs of queued tasks, "
+               "update plan.md, then run `coord task done`." % text) if building else (
+               "The owner asks for this change to the plan: \"%s\". Update plan.md, the tasks and their knowledge "
+               "files to match, then run `coord task done`." % text)
         if planner and planner["status"] in ("done", "waiting_on_you"):
-            planner.update(status="queue", resume=True, audit_round=0, question="", question_kind="",
-                           resume_msg="The owner asks for this change to the plan: \"%s\". Update plan.md, the tasks "
-                                      "and their knowledge files to match, then run `coord task done`." % text)
+            planner.update(status="queue", resume=True, audit_round=0, audit_final=False, question="",
+                           question_kind="", resume_msg=how)
             tid = planner["id"]
         else:
             tid = next_id(d, "P")
             d["tasks"].append(new_task(tid, "Fit the owner's addition into the plan", "plan"))
-        d["plan_approved"] = False
+        if not building:
+            d["plan_approved"] = False
         d["status"] = derive_status(d)
     if tid.startswith("P"):
         r.task_dir(tid).mkdir(parents=True, exist_ok=True)
         (r.task_dir(tid) / "knowledge.md").write_text(
             "# %s - Fit the owner's addition into the plan\n\n## The addition, word for word\n\n%s\n\n"
             "The current plan is plan.md; tasks are in tasks.json. Update the plan, add or change tasks and their "
-            "knowledge files. Don't touch tasks that are done.\n" % (tid, text))
+            "knowledge files. Don't touch tasks that are running or done.\n" % (tid, text))
     r.poke()
     start_daemon(r, "scheduler")
+    return ("the planner is fitting it into the plan; work already approved keeps going" if building
+            else "the planner is updating the plan; it comes back to you for approval")
 
 
 def cmd_add(a):
-    do_add(pick_run(a.run), " ".join(a.text))
-    print("the planner is updating the plan; it comes back to you after the officer's check")
+    print(do_add(pick_run(a.run), " ".join(a.text)))
+
+
+def do_say(r, text, tid=""):
+    """One message box for the owner: an answer, a note to a running agent, or more work, decided without a model."""
+    data = r.load()
+    by = {t["id"]: t for t in data["tasks"]}
+    if not tid:
+        named = [x for x in re.findall(r"\b([TPSWMB]\d+(?:-\w+)?)\b", text) if x in by]
+        asking = [t for t in data["tasks"] if t["status"] == "waiting_on_you"]
+        if len(set(named)) == 1:
+            tid = named[0]
+        elif len(asking) == 1 and not named:
+            tid = asking[0]["id"]
+    if tid:
+        t = by.get(tid)
+        if not t:
+            raise Fail("no task %s" % tid)
+        if t["status"] == "waiting_on_you":
+            do_answer(r, tid, text)
+            return "answered %s - it continues now" % tid
+        if t["status"] in ("in_progress", "review", "queue"):
+            return do_tell(r, tid, text)
+    if not data.get("plan_approved") and any(t["type"] == "plan" and t["status"] in OPEN for t in data["tasks"]):
+        planner = next(t for t in data["tasks"] if t["type"] == "plan" and t["status"] in OPEN)
+        if planner["status"] == "in_progress":
+            return do_tell(r, planner["id"], text)
+    return do_add(r, text)
+
+
+def cmd_say(a):
+    print(do_say(pick_run(a.run), " ".join(a.text), a.task or ""))
 
 
 def cmd_shots(a):
@@ -1872,7 +2666,7 @@ def cmd_map(a):
     ensure_store(project)
     name = "map-" + dt.datetime.now().strftime("%Y%m%d-%H%M")
     r = Run(project, name)
-    if not shutil.which(r.cfg["claude"]):
+    if not claude_found(r.cfg):
         raise Fail("`%s` is not on PATH" % r.cfg["claude"])
     note = " ".join(a.note or []).strip()
     exists = (project / STORE / "map" / "AGENTS.md").exists()
@@ -1960,7 +2754,164 @@ def cmd_update(a):
     if after == before:
         print("Coordinator %s is up to date." % after)
     else:
-        print("Updated Coordinator %s -> %s. Start a new Claude Code session to load the new /coordinate." % (before, after))
+        print("Updated Coordinator %s -> %s. Start a new Claude Code session to load the new /coordinate; running "
+              "schedulers pick up the new code by themselves, without stopping their agents." % (before, after))
+    ok, why = selftest(json.loads(json.dumps(DEFAULTS)))
+    print(("selftest passed: %s" if ok else "selftest FAILED: %s - runs would not start; see `coord selftest`") % why)
+
+
+def metrics_line(r, data):
+    """One run's numbers, without the owner's words: what `coord stats` reads after the run's files are gone."""
+    added = deleted = 0
+    if data.get("branch") and data.get("mode") == "build":
+        out = run(["git", "diff", "--shortstat", "%s...%s" % (data["base"], data["branch"])], cwd=r.project, check=False).stdout
+        m_add, m_del = re.search(r"(\d+) insertion", out), re.search(r"(\d+) deletion", out)
+        added, deleted = int(m_add.group(1)) if m_add else 0, int(m_del.group(1)) if m_del else 0
+    notes = data.get("owner_notes") or []
+    tasks = [{"id": t["id"], "type": t["type"], "role": role_of(t), "model": t.get("model") or r.cfg["models"].get(role_of(t), ""),
+              "effort": t.get("effort") or r.cfg["efforts"].get(role_of(t), ""), "size": t.get("size"),
+              "status": t["status"], "minutes": t.get("minutes", 0), "tokens": t.get("tokens", 0),
+              "cost": t.get("cost", 0), "audit_rounds": t.get("audit_round", 0), "attempts": t.get("attempts", 0),
+              "parent": t.get("parent", ""), "fix_kind": t.get("fix_kind", ""),
+              "questions": len(t.get("qa") or []), "defaults": sum(1 for q in t.get("qa") or [] if q.get("by_default"))}
+             for t in data["tasks"]]
+    created = data.get("created")
+    end = now()
+    wall = (dt.datetime.fromisoformat(end) - dt.datetime.fromisoformat(created)).total_seconds() / 60 if created else 0
+    return {"run": r.name, "version": data.get("version") or coord_version(), "mode": "quick" if data.get("quick") else
+            data.get("mode"), "full_auto": bool(data.get("full_auto")), "created": created, "ended": end,
+            "wall_minutes": round(wall, 1), "status": data.get("status"), "pr_url": data.get("pr_url", ""),
+            "pr_merged": bool(data.get("pr_merged")), "lines_added": added, "lines_deleted": deleted,
+            "owner": {"answers": sum(1 for n in notes if n["kind"] == "answer"),
+                      "additions": sum(1 for n in notes if n["kind"] == "addition"),
+                      "notes": sum(1 for n in notes if n["kind"] == "note"),
+                      "defaults": sum(1 for n in notes if n["kind"] == "default")},
+            "minutes": round(sum(t["minutes"] for t in tasks), 1), "tokens": sum(t["tokens"] for t in tasks),
+            "cost": round(sum(t["cost"] for t in tasks), 4), "tasks": tasks, "gates": data.get("gates") or []}
+
+
+def record_metrics(r, data):
+    if data.get("metrics_recorded") or not data.get("tasks"):
+        return
+    line = metrics_line(r, data)
+    store = r.project / STORE
+    store.mkdir(exist_ok=True)
+    with locked(store / ".metrics.lock"):
+        with open(store / "metrics.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    if r.tasks_file.exists():
+        with r.edit() as d:
+            d["metrics_recorded"] = now()
+
+
+def print_stats(m):
+    print("%s · %s%s · %s · %s wall, %s agent time · $%.2f · %s tokens · +%d/-%d lines%s" % (
+        m["run"], m["mode"], ", full auto" if m.get("full_auto") else "", m["status"], human_minutes(m["wall_minutes"]),
+        human_minutes(m["minutes"]), m["cost"], human_tokens(m["tokens"]), m["lines_added"], m["lines_deleted"],
+        " · %s" % m["pr_url"] if m.get("pr_url") else ""))
+    by_role = {}
+    for t in m["tasks"]:
+        x = by_role.setdefault(t["role"], [0, 0.0, 0.0])
+        x[0] += 1
+        x[1] += t["minutes"]
+        x[2] += t["cost"]
+    print("  by role: " + ", ".join("%s %d × %s $%.2f" % (k, v[0], human_minutes(v[1]), v[2]) for k, v in sorted(by_role.items())))
+    for t in m["tasks"]:
+        print("  %-10s %-8s %-7s %s/%s size %s · %s · $%.2f%s%s" % (
+            t["id"], t["role"], t["status"], t["model"], t["effort"], t["size"], human_minutes(t["minutes"]), t["cost"],
+            " · %d audit round(s)" % t["audit_rounds"] if t["audit_rounds"] else "",
+            " · %d question(s), %d by default" % (t["questions"], t["defaults"]) if t["questions"] else ""))
+    for g in m.get("gates") or []:
+        print("  gate after %s: %s in %ds%s%s" % (g["task"], "pass" if g["ok"] else "FAIL", g["seconds"],
+                                                  " (flaky)" if g.get("flaky") else "", " (known failure)" if g.get("known") else ""))
+    o = m.get("owner") or {}
+    print("  owner: %d answer(s), %d addition(s), %d note(s); %d question(s) settled by default" % (
+        o.get("answers", 0), o.get("additions", 0), o.get("notes", 0), o.get("defaults", 0)))
+
+
+def cmd_stats(a):
+    project = project_root()
+    lines = []
+    f = project / STORE / "metrics.jsonl"
+    if f.exists():
+        for x in f.read_text(encoding="utf-8").splitlines():
+            try:
+                lines.append(json.loads(x))
+            except ValueError:
+                pass
+    live = {r.name: metrics_line(r, r.load()) for r in list_runs(project) if not r.load().get("metrics_recorded")}
+    pick = lambda name: next((m for m in reversed(lines) if m["run"] == name), None) or live.get(name)
+    if a.all:
+        for m in lines + list(live.values()):
+            print_stats(m)
+        return
+    names = [a.run] if a.run else []
+    if not names:
+        latest = (lines[-1:] + list(live.values()))
+        names = [max(latest, key=lambda m: m.get("ended") or "")["run"]] if latest else []
+    if a.compare:
+        names.append(a.compare)
+    if not names:
+        print("no runs recorded in this project yet")
+        return
+    for n in names:
+        m = pick(n)
+        if not m:
+            raise Fail("no run named %s in %s or among the open runs" % (n, f))
+        print_stats(m)
+
+
+SELFTEST_PROMPT = "Reply with exactly the word READY and nothing else."
+
+
+def selftest(cfg, cached=False):
+    """Start one tiny agent the way runs start theirs (same flags, prompt on stdin, role prompt from a file, inline
+    agents), then resume it. (ok, why). Cached per Claude Code version, so a CLI change is caught before a run."""
+    ver = run(claude_argv(cfg) + ["--version"], check=False)
+    version = (ver.stdout or ver.stderr).strip()[:80]
+    cache = HOME / "selftest.json"
+    seen = read_json(cache, {}) or {}
+    if cached and seen.get("version") == version and seen.get("ok") and seen.get("coord") == coord_version():
+        return True, "cached"
+    with tempfile.TemporaryDirectory(prefix="coord-selftest-") as tmp:
+        tmp = Path(tmp)
+        role = tmp / "role.md"
+        role.write_text("You are checking that Coordinator can start you. Follow the prompt exactly.\n")
+        settings = tmp / "settings.json"
+        write_json(settings, {"permissions": {"allow": ["Bash(coord:*)"], "deny": ["Bash(git push:*)"]}})
+        agents = json.dumps({"coord-check": {"description": "A check agent.", "prompt": "Say OK.\nLine two & more.",
+                                             "model": "haiku", "effort": "low"}}, separators=(",", ":"))
+        sid = str(uuid.uuid4())
+        base = claude_argv(cfg) + ["-p", "--model", "haiku", "--effort", "low", "--permission-mode", cfg["permission_mode"],
+                                   "--settings", str(settings), "--output-format", "json", "-n", "coord-selftest",
+                                   "--append-system-prompt-file", str(role), "--agents", agents]
+        why = ""
+        for step, cmd, prompt in (("start", base + ["--session-id", sid], SELFTEST_PROMPT),
+                                  ("resume", base + ["--resume", sid], "Again: " + SELFTEST_PROMPT)):
+            try:
+                p = subprocess.run(argv(cmd), cwd=str(tmp), input=prompt, text=True, capture_output=True, timeout=180,
+                                   env=dict(os.environ, COORD_ROLE="", COORD_RUN_DIR=""))
+            except (OSError, subprocess.TimeoutExpired) as e:
+                why = "%s: %s" % (step, e)
+                break
+            out = None
+            try:
+                out = json.loads(p.stdout)
+            except ValueError:
+                pass
+            if p.returncode or not out or "READY" not in str(out.get("result", "")):
+                why = "%s: exit %s; %s" % (step, p.returncode, ((p.stderr or "") + (p.stdout or "")).strip()[-400:])
+                break
+    ok = not why
+    write_json(cache, {"version": version, "ok": ok, "why": why, "at": now(), "coord": coord_version()})
+    return ok, why or "agents start and resume"
+
+
+def cmd_selftest(a):
+    cfg = load_config(project_root()) if run(["git", "rev-parse"], check=False).returncode == 0 else json.loads(json.dumps(DEFAULTS))
+    ok, why = selftest(cfg)
+    print(("selftest passed: %s" if ok else "selftest FAILED: %s") % why)
+    return 0 if ok else 1
 
 
 def cmd_list(a):
@@ -1968,7 +2919,7 @@ def cmd_list(a):
     if not runs:
         print("no coordinators in this project")
     for r in runs:
-        print(summary(r.load(), alive(r.state().get("scheduler_pid"))))
+        print(summary(r.load(), r.alive("scheduler")))
 
 
 def cmd_terminate(a):
@@ -1976,12 +2927,18 @@ def cmd_terminate(a):
     with r.edit() as d:
         d["terminating"] = True
     st = r.state()
-    kill_group(st.get("scheduler_pid"))
+    kill_group(st.get("scheduler_pid"), start=st.get("scheduler_start", ""))
     for job in (st.get("agents") or {}).values():
-        kill_group(job.get("pid"))
-    for pid in [st.get("viewer_pid")] + list(st.get("dev_pids") or []):
+        kill_group(job.get("pid"), start=job.get("start", ""))
+    kill_group(st.get("viewer_pid"), start=st.get("viewer_start", ""))
+    for pid in list(st.get("dev_pids") or []):
         kill_group(pid)
     data = r.load()
+    if not data.get("metrics_recorded"):
+        try:
+            record_metrics(r, data)
+        except Exception as e:
+            print("could not record the run's metrics: %r" % e, file=sys.stderr)
     saved = []
     for t in data["tasks"]:
         wt = r.wt(t["id"])
@@ -2193,7 +3150,7 @@ def cmd_task(a):
         return
     if act in ("add", "edit", "remove", "design", "followup") and role != "planner":
         raise Fail("only the planner adds, edits or removes tasks and records the design language and follow-up runs")
-    msg = ""
+    msg, nudge = "", ""
     repo = followup_repo(r, a.repo or "") if act == "followup" else None
     with r.edit() as d:
         if act == "followup":
@@ -2228,6 +3185,8 @@ def cmd_task(a):
             new["ui"] = a.ui == "on"
             if new["id"] in known:
                 raise Fail("%s exists" % new["id"])
+            if d.get("plan_approved") and d.get("mode") == "build":
+                new["pending_approval"] = True  # an addition while the run builds: it waits for the owner's approval
             d["tasks"].append(new)
             r.task_dir(new["id"]).mkdir(parents=True, exist_ok=True)
             msg = "added %s - now write its brief to %s" % (new["id"], r.task_dir(new["id"]) / "knowledge.md")
@@ -2280,28 +3239,66 @@ def cmd_task(a):
                              and not nonempty(r.task_dir(x["id"]) / "knowledge.md")]
                     if empty:
                         raise Fail("these tasks have no knowledge.md yet: %s" % ", ".join(empty))
+                    n, depth = critical_path(d)
+                    width = -(-n // max(1, int(r.cfg["max_parallel"]))) + 1
+                    if n >= 3 and depth > width and not t.get("width_checked"):
+                        t["width_checked"] = True  # saved, then refused below: the planner is asked once
+                        nudge = ("%d of your %d tasks run one after another. If some could run side by side, split "
+                                 "by file or area instead of by step (against an agreed contract, with one task to "
+                                 "join them), and set --deps only where a task needs another's result. If the chain "
+                                 "is needed, say why in one line under \"Approach\". Then run `coord task done` "
+                                 "again." % (depth, n))
                 officer = r.cfg["officer"]
-                check = officer.get("plan") if t["type"] in ("plan", "map") else (
-                    officer.get("tasks") and t["type"] == "build" and not t.get("parent"))
-                t["status"] = "audit" if check else "done"
-                t["finished"] = now()
+                if t["type"] == "plan":
+                    check = officer_on_plan(r.cfg, d) and not t.get("audit_final") and t["audit_round"] < int(
+                        officer.get("max_rounds", 1))
+                elif t["type"] == "map":
+                    check = officer.get("plan") not in (False, "never") and t["audit_round"] < int(officer.get("max_rounds", 1))
+                else:
+                    check = officer.get("tasks") and t["type"] == "build" and not t.get("parent") and not d.get("quick")
+                if not nudge:
+                    t["status"] = "audit" if check else "done"
+                    t["finished"] = now()
                 msg = "done - the hallucination officer checks it next. End your turn now." if check else "done. End your turn now."
             elif act == "ask":
-                t.update(status="waiting_on_you", question=" ".join(a.text), question_kind="agent")
-                msg = "question recorded. End your turn now; you are resumed with the answer."
+                if not a.default and not a.no_default:
+                    raise Fail("give your recommended answer with --default \"...\": the run goes on with it if the "
+                               "owner doesn't answer in time. Only a question with no safe default (a secret, an "
+                               "account, a payment) takes --no-default, and then it waits for the owner.")
+                t.update(status="waiting_on_you", question=" ".join(a.text), question_kind="agent",
+                         question_default=(a.default or "").strip(), question_at=now())
+                minutes = 3 if d.get("full_auto") else r.cfg.get("question_minutes")
+                msg = ("question recorded; if the owner doesn't answer within %s minutes, you go on with your default. "
+                       "End your turn now; you are resumed with the answer." % minutes) if a.default else \
+                    "question recorded. End your turn now; you are resumed with the answer."
+            elif act == "intent":
+                t["intent"] = " ".join(a.text).strip()
+                msg = "intent recorded; the owner sees it on the live page. Carry on."
+            elif act == "rest":
+                t["rest"] = " ".join(a.text).strip()
+                msg = "recorded; it becomes a follow-on task once this one merges. Finish this one now."
             elif act == "note":
                 (r.task_dir(tid) / "resume.md").write_text("# Resume note (%s)\n\n%s\n" % (now()[:16], " ".join(a.text)))
                 t["status"] = "paused"
                 msg = "note saved. End your turn now."
             elif act == "todo":
                 todos = d.setdefault("todos", [])
-                n = max([x["n"] for x in todos] or [0]) + 1
-                todos.append({"n": n, "task": tid, "text": " ".join(a.text), "at": now(), "done": False})
-                msg = "recorded for the owner (step %d). Carry on with your work." % n
+                words = " ".join(a.text).split()
+                if words in (["list"], ["show"]):
+                    msg = "\n".join("%d. [%s] %s" % (x["n"], "done" if x.get("done") else "to do", x["text"])
+                                    for x in todos) or "no manual steps recorded"
+                elif len(words) < 4:
+                    raise Fail("say what the owner must do and why, in a sentence")
+                else:
+                    n = max([x["n"] for x in todos] or [0]) + 1
+                    todos.append({"n": n, "task": tid, "text": " ".join(a.text), "at": now(), "done": False})
+                    msg = "recorded for the owner (step %d). Carry on with your work." % n
+    if nudge:
+        raise Fail(nudge)
     r.poke()
     if act == "ask":
         notify("coord · %s" % r.name, "%s asks: %s" % (tid, " ".join(a.text))[:200])
-    if act == "todo":
+    if act == "todo" and msg.startswith("recorded"):
         notify("coord · %s" % r.name, "%s: for you to do: %s" % (tid, " ".join(a.text))[:200])
     print(msg)
 
@@ -2315,6 +3312,8 @@ def cmd_audit(a):
     with r.edit() as d:
         t = find(d, tid)
         t["audit_verdict"], t["audit_file"] = a.verdict, str(Path(a.file).resolve())
+        if a.verdict == "notes":
+            t["audit_notes"] = str(Path(a.file).resolve())
     r.poke()
     print("verdict recorded: %s. End your turn now." % a.verdict)
 
@@ -2335,7 +3334,7 @@ def cmd_hook(a):
         return 0
     tool, ti = inp.get("tool_name", ""), inp.get("tool_input") or {}
     cmd = ti.get("command", "") if tool == "Bash" else ""
-    if re.search(r"/api/(approve|accept|answer|pause|resume|todo|merge|auto)\b", cmd):
+    if re.search(r"/api/(approve|accept|answer|pause|resume|todo|merge|auto|say)\b", cmd):
         # The run's own live page takes the owner's clicks, not an agent's requests
         port = Run(Path(rd).parent.parent, Path(rd).name).state().get("viewer_port")
         if port and re.search(r"(127\.0\.0\.1|localhost|0\.0\.0\.0):%s\b" % port, cmd):
@@ -2362,14 +3361,40 @@ def cmd_hook(a):
         return 2
     path = ti.get("file_path") or ti.get("notebook_path")
     wt = os.environ.get("COORD_WT", "")
+    if tool == "Read" and path and role in ("planner", "builder"):
+        real = os.path.realpath(os.path.expanduser(path))
+        try:
+            size = os.path.getsize(real)
+        except OSError:
+            size = 0
+        if real.endswith(".jsonl") and under(real, str(TRANSCRIPTS)):
+            sys.stderr.write("Blocked: transcripts are too big to read here. Hand them to `coord-briefer` (Agent tool, "
+                             "subagent_type coord-briefer) with your question and a brief path in your task folder.\n")
+            return 2
+        if size > (256 << 10) and not (ti.get("limit") and int(ti.get("limit") or 0) <= 600):
+            sys.stderr.write("Blocked: %s is %d KB. Read the part you need (offset and limit of at most 600 lines), "
+                             "find it with Grep, or hand the file to `coord-briefer` with your question.\n"
+                             % (path, size >> 10))
+            return 2
     if tool in ("Edit", "Write", "NotebookEdit", "MultiEdit") and path and role == "builder" and t and not t.get("tests") and wt:
         real = os.path.realpath(os.path.expanduser(path))
         if under(real, wt):
             cfg = load_config(Path(rd).parent.parent)
-            if is_test_file(cfg, os.path.relpath(real, os.path.realpath(wt))):
-                sys.stderr.write("Blocked: tests are OFF for this task - the owner didn't ask for them. Don't add, change "
-                                 "or delete test files. If an existing test breaks because of your change, ask with "
-                                 "`coord task ask`.\n")
+            rel = os.path.relpath(real, os.path.realpath(wt))
+            if is_test_file(cfg, rel):
+                # A change can break an existing test only through a type or a name it uses: a small edit is allowed
+                lines = test_edit_lines(real, tool, ti) if os.path.isfile(real) and tool != "NotebookEdit" else None
+                ledger = Path(rd) / "tasks" / tid / "test-edits.json"
+                used = read_json(ledger, {}) or {}
+                if lines is not None and used.get(rel, 0) + lines <= 8:
+                    used[rel] = used.get(rel, 0) + lines
+                    ledger.parent.mkdir(parents=True, exist_ok=True)
+                    write_json(ledger, used)
+                    return 0
+                sys.stderr.write("Blocked: tests are OFF for this task - the owner didn't ask for them. You may only make "
+                                 "small edits (up to 8 lines per file in all, no new test cases or files) that a type, "
+                                 "name or signature change forces on an existing test; list them under \"Forced test "
+                                 "edits\" in changes.md. Anything bigger: ask with `coord task ask ... --default`.\n")
                 return 2
     if tool in ("Edit", "Write", "NotebookEdit", "MultiEdit") and path:
         real = os.path.realpath(os.path.expanduser(path))
@@ -2593,11 +3618,15 @@ def view_state(r):
     data["folder"] = folder_files(r.dir, skip={"tasks/%s" % t["id"] for t in data["tasks"]})
     data["dir"] = str(r.dir.resolve())
     data["platform"] = sys.platform
-    data["scheduler_alive"] = alive(st.get("scheduler_pid"))
+    data["scheduler_alive"] = r.alive("scheduler")
     data["agents"] = st.get("agents") or {}
     data["prs"] = pull_requests(r, data)
     data["waiting"] = owner_actions(r, data, data["scheduler_alive"])
     data["summary"] = summary(data, data["scheduler_alive"])
+    n, depth = critical_path(data)
+    data["shape"] = {"tasks": n, "parallel": min(n, int(r.cfg["max_parallel"])), "chain": depth}
+    data["overlaps"] = run_overlaps(r, data) if not data.get("plan_approved") else []
+    data["cost"] = round(sum(t.get("cost", 0) for t in data["tasks"]), 2)
     data["now"] = now()
     data["project"] = r.project.name
     return data
@@ -2785,6 +3814,11 @@ def cmd_viewer(a):
                     start_merge(r)
                 elif act == "/api/auto":
                     do_auto(r, body["on"] is True)
+                elif act == "/api/say":
+                    text = (body.get("text") or "").strip()
+                    if not text:
+                        raise Fail("write a message first")
+                    return self.send(200, json.dumps({"ok": True, "reply": do_say(r, text, body.get("task") or "")}))
                 elif act == "/api/reveal":
                     p = view_path(r, body["path"], body.get("task") or "", body.get("in") == "folder")
                     if not p:
@@ -2800,13 +3834,13 @@ def cmd_viewer(a):
         raise KeyboardInterrupt
 
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    r.set_state(viewer_pid=os.getpid(), viewer_port=port)
+    r.set_state(viewer_pid=os.getpid(), viewer_start=proc_start(os.getpid()), viewer_port=port)
     signal.signal(signal.SIGTERM, stop)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
-    r.set_state(viewer_pid=0)
+    r.set_state(viewer_pid=0, viewer_start="")
 
 
 # ---------------------------------------------------------------- before/after shots
@@ -2824,8 +3858,8 @@ def wait_http(url, timeout):
     raise Fail("the dev server at %s did not answer within %ds" % (url, timeout))
 
 
-def shoot(cfg, url, out, width, height, theme, wait_ms):
-    cmd = ["npx", "-y", cfg["playwright"], "screenshot", "--browser", "chromium", "--viewport-size", "%d,%d" % (width, height),
+def shoot(cfg, url, out, width, height, theme, wait_ms, browser="chromium"):
+    cmd = ["npx", "-y", cfg["playwright"], "screenshot", "--browser", browser, "--viewport-size", "%d,%d" % (width, height),
            "--full-page", "--wait-for-timeout", str(wait_ms), "--color-scheme", theme, url, str(out)]
     run(cmd)
 
@@ -2886,7 +3920,9 @@ def cmd_shoot(a):
         base_wt.parent.mkdir(parents=True, exist_ok=True)
         git(r.project, "worktree", "add", "--detach", str(base_wt), data["base"])
         setup_worktree(r, base_wt)
-    run_wt = ensure_run_wt(r, data)
+    # A builder shoots its own worktree; the screenshot task shoots the run branch
+    own = os.environ.get("COORD_ROLE") == "builder" and os.environ.get("COORD_WT")
+    run_wt = Path(os.environ["COORD_WT"]) if own else ensure_run_wt(r, data)
     servers, urls = [], {}
     (r.brain / "logs").mkdir(parents=True, exist_ok=True)
     work = shots_dir(r)
@@ -2904,16 +3940,18 @@ def cmd_shoot(a):
             wait_http(base + dev.get("ready_path", "/"), 420)
         rows = []
         shots = cfg["shots"]
+        browsers = shots.get("browsers") or ["chromium"]
         for page in a.page:
             path = page if page.startswith("/") else "/" + page
-            for w in shots["widths"]:
-                for theme in shots["themes"]:
-                    files = {}
-                    for label in ("before", "after"):
-                        f = work / ("%s--%s--%d--%s.png" % (label, slug(path, 60), w, theme))
-                        shoot(cfg, urls[label] + path, f, w, shots["height"], theme, shots["wait_ms"])
-                        files[label] = f
-                    rows.append((path, w, theme, files))
+            for browser in browsers:
+                for w in shots["widths"]:
+                    for theme in shots["themes"]:
+                        files = {}
+                        for label in ("before", "after"):
+                            f = work / ("%s--%s--%s--%d--%s.png" % (label, slug(path, 60), browser, w, theme))
+                            shoot(cfg, urls[label] + path, f, w, shots["height"], theme, shots["wait_ms"], browser)
+                            files[label] = f
+                        rows.append(("%s · %s" % (path, browser) if len(browsers) > 1 else path, w, theme, files))
         dest_base = work / "before-after"
         if (work / "before-after.png").exists() or (work / "before-after part 1.png").exists():
             dest_base = work / ("before-after " + dt.datetime.now().strftime("%Y-%m-%d %H.%M.%S"))
@@ -2940,8 +3978,31 @@ def main(argv=None):
     p.add_argument("--plan-only", action="store_true", help="plan goals and tasks for later; build nothing")
     p.add_argument("--full-auto", action="store_true",
                    help="you're away: /coordinate decides for you, merges and ends the run (also a leading <full auto>)")
+    p.add_argument("--quick", action="store_true", help="one builder, no planner: for one coherent change")
+    p.add_argument("--size", choices=["S", "M", "L"], help="quick run: the change's size (its time box)")
+    p.add_argument("--tests", choices=["on", "off"], help="quick run: on only when the owner's words ask for tests")
+    p.add_argument("--ui", choices=["on", "off"], help="quick run: on when the change is to what people see")
+    p.add_argument("--model", help="the planner's model, or a quick run's builder's")
+    p.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"],
+                   help="the planner's effort, or a quick run's builder's")
+    p.add_argument("--skip-selftest", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--no-open", action="store_true")
     p.set_defaults(fn=cmd_start)
+
+    p = sub.add_parser("say", help="one message to the run: it answers a question, reaches a running agent, or adds work")
+    p.add_argument("text", nargs="+")
+    p.add_argument("--task", help="the task it is for")
+    p.add_argument("--run")
+    p.set_defaults(fn=cmd_say)
+
+    p = sub.add_parser("stats", help="a run's time, cost and stages, also after it ended; --compare puts two side by side")
+    p.add_argument("run", nargs="?")
+    p.add_argument("--compare")
+    p.add_argument("--all", action="store_true")
+    p.set_defaults(fn=cmd_stats)
+
+    p = sub.add_parser("selftest", help="check that Claude Code can start and resume Coordinator's agents (a tiny Haiku call)")
+    p.set_defaults(fn=cmd_selftest)
 
     p = sub.add_parser("status", help="open the live page and print one line")
     p.add_argument("run", nargs="?")
@@ -2960,8 +4021,10 @@ def main(argv=None):
     p.add_argument("run", nargs="?")
     p.set_defaults(fn=cmd_auto)
 
-    for name, help_ in (("approve", "approve the plan"), ("pause", "pause: agents write a note and stop"),
-                        ("resume", "resume a paused or stopped run"), ("run", "build a planned run")):
+    for name, help_ in (("approve", "approve the plan, or the planner's additions to it"),
+                        ("pause", "pause: agents write a note and stop"),
+                        ("resume", "resume a paused or stopped run"), ("run", "build a planned run"),
+                        ("restart", "restart the scheduler without stopping its agents (picks up a changed coord)")):
         p = sub.add_parser(name, help=help_)
         p.add_argument("run", nargs="?")
         p.set_defaults(fn=cmd_simple)
@@ -2984,7 +4047,7 @@ def main(argv=None):
     p.add_argument("--run")
     p.set_defaults(fn=cmd_todo)
 
-    p = sub.add_parser("add", help="change the plan or add work; it goes back through the officer and you")
+    p = sub.add_parser("add", help="change the plan or add work; approved work keeps building while the planner fits it in")
     p.add_argument("text", nargs="+")
     p.add_argument("--run")
     p.set_defaults(fn=cmd_add)
@@ -3018,7 +4081,7 @@ def main(argv=None):
 
     p = sub.add_parser("task", help="(agents) update your own task")
     p.add_argument("action", choices=["show", "list", "start", "review", "done", "ask", "note", "add", "edit", "remove", "design",
-                                       "followup", "todo"])
+                                       "followup", "todo", "intent", "rest"])
     p.add_argument("target", nargs="?")
     p.add_argument("text", nargs="*")
     p.add_argument("--id")
@@ -3033,10 +4096,12 @@ def main(argv=None):
     p.add_argument("--source", help="for `design`: the guides' paths, or the owner's words")
     p.add_argument("--external", help="files outside the repo the project's rules require this task to update (absolute paths)")
     p.add_argument("--repo", help="for `followup`: the other repo's absolute path; coord starts a run there on approval")
+    p.add_argument("--default", help="for `ask`: your recommended answer; the run goes on with it if the owner doesn't answer in time")
+    p.add_argument("--no-default", action="store_true", help="for `ask`: only when no answer is safe without the owner")
     p.set_defaults(fn=cmd_task)
 
     p = sub.add_parser("audit", help="(officer) record a verdict")
-    p.add_argument("verdict", choices=["approve", "revise"])
+    p.add_argument("verdict", choices=["approve", "notes", "revise"])
     p.add_argument("--file", required=True)
     p.set_defaults(fn=cmd_audit)
 
@@ -3058,7 +4123,7 @@ def main(argv=None):
     a, extra = ap.parse_known_args(argv)
     if extra and not (a.cmd == "task" and a.action == "followup"):
         ap.error("unrecognized arguments: %s" % " ".join(extra))
-    if a.cmd == "task" and a.action in ("ask", "note", "followup", "todo"):
+    if a.cmd == "task" and a.action in ("ask", "note", "followup", "todo", "intent", "rest"):
         a.text = ([a.target] if a.target else []) + a.text + extra
         if not a.text and a.action != "followup":
             ap.error("say what: coord task %s \"...\"" % a.action)

@@ -13,19 +13,18 @@ Every task must trace back to words in the request or to a fact in the code.
 
 ## The project's instructions come first
 
-Your first message lists the project's instruction files: its `CLAUDE.md` and `AGENTS.md`, those of the folders
-above it, and `.claude/rules`. They are the owner's current versions. Read them in full before anything else,
-together with every guide they mark as required for the area you work in, and read a guide in full when they say
-so, even where this role says to read narrowly. Where they and this role disagree, they win. If they conflict with
-how Coordinator works (commits on a run branch, the `.coordinator/` folder, pushing), don't pick a side: ask the
-owner with `coord task ask`.
+Claude Code has already loaded the project's instruction files (your first message lists them: its `CLAUDE.md`
+and `AGENTS.md`, those of the folders above it, and `.claude/rules`); don't open them again. Read the guides they
+mark as required for the areas this request touches, in full where they say so. Where they and this role disagree,
+they win. Coordinator commits on the run branch and pushes it: that is how a project rule to commit or push is met
+in a run, so it is never a question for the owner.
 
 ## Steps
 
 1. Read your knowledge file: it holds the owner's request word for word. Your first message may add the owner's
    later words; they count exactly like the request.
-2. Read the project's instructions (above) and the guides they require for the areas this request touches.
-   Note every rule a task must follow: required reading, conventions, file placement, what must never be
+2. Read the guides the project's instructions require for the areas this request touches. Note every rule a
+   task must follow: required reading, conventions, file placement, what must never be
    touched, commit message rules, and where plans, status or decisions must be recorded.
 3. Read the code the request touches. If `.coordinator/map/AGENTS.md` exists, start there: it is the project's
    map, so open only the cards your request touches and follow their citations into the code. Otherwise find
@@ -33,9 +32,12 @@ owner with `coord task ask`.
    repository. Big content (long files, logs, data) goes to `coord-briefer` (Agent tool, `subagent_type:
    coord-briefer`) with what to read, the question, and a brief path in your task folder; open the lines it cites
    before relying on them. Note what already exists, so tasks reuse it.
-4. If the project's `.coordinator/config.json` has an empty `gate`, `setup` or `dev.command`, fill it from the
-   project's own docs and package files:
-   - `gate`: the commands the project uses to prove a change in this area (typecheck, lint, tests, build);
+4. If the project's `.coordinator/config.json` has an empty `gate`, `check`, `setup` or `dev.command`, fill it
+   from the project's own docs and package files:
+   - `gate`: the commands the project uses to prove a change (typecheck, lint, tests, build); the scheduler runs
+     it once after each task merges;
+   - `check`: the fast part a builder runs while it works (typecheck and lint, no full build), or empty to let
+     builders pick the checks for what they touched;
    - `setup`: what a fresh git worktree needs before the gate can run (for example linking or copying installed
      dependencies from `$COORD_MAIN`); empty if nothing;
    - `dev.command`: the dev server command with `{port}` in place of the port, and `dev.cwd`; empty if none.
@@ -43,7 +45,10 @@ owner with `coord task ask`.
    - each one coherent and about 30-45 minutes of work for a strong engineer; split anything bigger;
    - as few tasks as the request needs; a small request may be one task;
    - dependencies: a task depends on another only when it needs that task's result. Tasks without a dependency
-     between them run at the same time, each in its own worktree;
+     between them run at the same time, each in its own worktree. Split by file or area, not by step: parts that
+     meet at a contract (a type, an endpoint, a prop list) are built side by side against it, with one small task
+     to join them when needed. A chain of more than a few tasks needs a reason under "Approach";
+   - measuring or profiling performance is its own task with a budget in its brief, never part of a build task;
    - files: list the paths or globs each task may change. Two tasks that share a file never run together, so
      keep the lists tight and accurate;
    - no tasks for screenshots, reports, status pages or "verification": every task proves itself;
@@ -53,8 +58,9 @@ owner with `coord task ask`.
      the files and a brief, with the task that needs judgment depending on it;
    - tests: none by default. Turn a task's tests on (`--tests on`) only when the owner's words ask for tests,
      and then name the few tests it needs in its knowledge file: short, logical, testing behaviour the owner
-     cares about. Never plan to rewrite, "update" or delete existing tests unless the owner asked; if a change
-     will break an existing test, put that under "Questions for the owner";
+     cares about. Never plan to rewrite, "update" or delete existing tests unless the owner asked. A small edit a
+     type or name change forces on an existing test is allowed without asking; anything bigger goes under
+     "Questions for the owner";
    - knowledge the project's rules require: when they say plans, status, decisions or product pages live in a
      knowledge base outside the repo (and that a change like this one must update them), add a task for it with
      `--external` listing the exact files. Nothing else may be written outside the repo;
@@ -155,8 +161,8 @@ owner with `coord task ask`.
 
    Keep each question on that one line: leave out `- options: ...` for an open question, but always give the
    default. The live page shows each question with its options and lets the owner pick one, write their own
-   answer, or approve all defaults. Put any conflict between the project's rules and how Coordinator works under
-   "Questions for the owner".
+   answer, or approve all defaults. Ask only what is truly the owner's to decide: a question the request, the
+   project's rules or the code already answers is not a question. Builders act on the defaults you give.
 
    No ask is dropped. Every ask in the owner's words (the request and every addition) maps to a task or to a line
    under "Not in this run" saying where it goes. Never defer an ask for another repo silently: record it with
@@ -169,6 +175,10 @@ owner with `coord task ask`.
 The officer's report, or the owner's words, arrive in your session. Fix what they ask: update `plan.md`, the
 tasks and their knowledge files. If you disagree with a point, say why under "Approach" in one line. Then run
 `coord task done` again.
+
+When the owner adds something while the run builds, tasks that are running or done stay as they are: add tasks
+for the addition (they wait for the owner's approval of just those) or change the briefs of queued tasks, and
+update `plan.md`.
 
 ## Plan-only runs
 

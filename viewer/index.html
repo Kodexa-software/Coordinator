@@ -471,6 +471,7 @@ a.f-item{text-decoration:none}
   aside.open{opacity:1;transition:opacity var(--co-dur-quick) linear}
   .v-panel,.viewer.open .v-panel{transform:none;transition:opacity var(--co-dur-quick) linear}
 }
+.say{margin:12px 0}.say textarea{width:100%;min-height:52px;box-sizing:border-box}.say .muted{opacity:.7;font-size:13px}
 </style>
 </head>
 <body>
@@ -514,6 +515,8 @@ a.f-item{text-decoration:none}
       <h2 class="w-title" id="w-title" tabindex="-1">Waiting on you <span class="count" id="w-count">0</span></h2>
       <p class="w-auto" id="w-auto" hidden>Full auto is on: /coordinate decides these for you.</p>
       <div class="attention" id="attention"></div>
+      <div class="card say"><textarea id="say" placeholder="Message the run: an answer, a note for a running task (name it, like T2), or more work" aria-label="Message the run"></textarea>
+        <div class="row"><button class="btn primary" id="say-send">Send</button><span id="say-reply" class="muted"></span></div></div>
     </div>
   </section>
   <div class="stats" id="stats"></div>
@@ -671,7 +674,7 @@ function card(t, a){
     ${a?`<span class="pill sm s-in_progress">${esc(a.role)} · ${since(a.since)}</span>`:`<span class="pill sm s-${esc(t.status)}">${LABEL[t.status]||esc(t.status)}</span>`}
     ${t.model?`<span>${esc(t.model)}${t.effort?" · "+esc(t.effort):""}</span>`:""}${t.size&&t.type!=="plan"?`<span>${esc(t.size)}</span>`:""}
     ${t.depends_on.length?`<span>after ${esc(t.depends_on.join(", "))}</span>`:""}${t.tests?`<span>tests on</span>`:""}${t.audit_round?`<span>officer ×${t.audit_round}</span>`:""}
-    ${t.tokens?`<span>${fmtTok(t.tokens)} · ${fmtMin(t.minutes)}</span>`:""}</div>`;
+    ${t.tokens?`<span>$${(t.cost||0).toFixed(2)} · ${fmtMin(t.minutes)}</span>`:""}</div>${t.intent&&!["done","skipped"].includes(t.status)?`<div class="meta"><span>intent: ${esc(t.intent)}</span></div>`:""}`;
 }
 
 // The plan's short version, read from plan.md: goal, order, what this run leaves out, and each question to settle.
@@ -782,7 +785,8 @@ async function sendPlan(b){
 
 // Each thing waiting on the owner (s.waiting, the same list `coord wait` prints) with its action in place.
 const KIND = {plan:"Plan", question:"Question", officer:"Officer stalemate", stalled:"Stalled", scheduler:"Scheduler",
-              followup:"Follow-up run", todo:"Manual step", pr:"Pull request", external:"Outside the repo"};
+              followup:"Follow-up run", todo:"Manual step", pr:"Pull request", external:"Outside the repo",
+              changes:"Plan changes", gate:"Gate"};
 const OUT = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M5 11 11 5M6 5h5v5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 function waitItem(s, w){
   const kind = w.kind==="question" && w.question_kind!=="agent" ? w.question_kind : w.kind;
@@ -795,6 +799,7 @@ function waitItem(s, w){
   if(w.kind==="scheduler") return {cls:"card notice bad", html:tag+`<h3>The scheduler is not running</h3><p>Nothing is being worked on. Resume to pick up where it stopped.</p><div class="row"><button class="btn primary" data-act="resume">Resume</button></div>`};
   if(w.kind==="followup") return w.url ? {cls:"card notice", html:tag+`<h3>${esc(w.text)}</h3><p>It plans in its own repo and waits for you there.</p>${link("Open its live page")}`}
     : {cls:"card notice"+(w.failed?" bad":""), html:tag+`<h3>${esc(w.text)}</h3><p>${w.failed?"Start it yourself from that repo with <code>/coordinate</code>.":inline(esc(w.do))}</p>`};
+  if(w.kind==="changes") return {cls:"card notice", html:tag+`<h3>${esc(w.text)}</h3><p>Work already approved keeps going. These start once you approve them.</p><div class="row"><button class="btn primary" data-act="approve-changes">Approve them</button></div>`};
   if(w.kind==="todo") return {cls:"card notice", html:tag+`<p>${inline(esc(w.text))}</p><div class="row"><button class="btn primary" data-act="todo" data-n="${esc(w.n)}">Mark done</button></div>`};
   if(w.kind==="pr") return prCard(w, tag, link);
   if(w.kind==="external") return {cls:"card notice", html:tag+`<h3>Commit the files updated outside the repo</h3><p>Coordinator doesn't commit them.</p><ul class="w-files">${(w.files||[]).map((f)=>`<li><code>${esc(f)}</code></li>`).join("")}</ul>`};
@@ -892,7 +897,7 @@ function render(s){
   const tok = s.tasks.reduce((a,t)=>a+(t.tokens||0),0), mins = s.tasks.reduce((a,t)=>a+(t.minutes||0),0);
   const end = ["finished","planned"].includes(s.status) ? s.updated : null;
   const wall = ((end?Date.parse(end):Date.now()) - Date.parse(s.created))/60000;
-  setHTML($("#stats"), `<div><b>${done}/${work.length}</b>tasks</div><div><b>${fmtMin(wall)}</b>elapsed</div><div><b>${fmtMin(mins)}</b>agent time</div><div><b>${fmtTok(tok)}</b>tokens</div><div><b>${Object.keys(s.agents||{}).length}</b>agents live</div>`);
+  setHTML($("#stats"), `<div><b>${done}/${work.length}</b>tasks</div><div><b>${fmtMin(wall)}</b>elapsed</div><div><b>${fmtMin(mins)}</b>agent time</div><div><b>$${(s.cost||0).toFixed(2)}</b>cost</div><div><b>${Object.keys(s.agents||{}).length}</b>agents live</div>`);
   const au = $("#auto"); au.hidden = s.mode==="map"; au.setAttribute("aria-checked", s.full_auto ? "true" : "false");
   $("#w-auto").hidden = !s.full_auto;
   $("#pause").hidden = !["running","planning","waiting_on_you"].includes(s.status);
@@ -1178,7 +1183,7 @@ document.addEventListener("click", async (e)=>{
   const menu = $("#prs").getAttribute("aria-expanded")==="true", focus = document.activeElement;
   if(menu && !e.target.closest("#prs-wrap")) prMenu(false, !focus || focus===document.body);
   if(e.target.closest("#prs")) return prMenu(!menu);
-  const b = e.target.closest("[data-reveal],[data-path],[data-view],#v-close,#v-back,#w-jump,[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],[data-settle],[data-unsettle],#d-close,#pause,#resume,#auto");
+  const b = e.target.closest("[data-reveal],[data-path],[data-view],#v-close,#v-back,#w-jump,[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],[data-settle],[data-unsettle],#d-close,#pause,#resume,#auto,#say-send");
   if(!b) return;
   if(b.id==="auto"){ b.disabled = true; try{ await api("/api/auto",{on:b.getAttribute("aria-checked")!=="true"}); } finally { b.disabled = false; } return; }
   if(b.id==="v-close" || b.id==="v-back") return closeViewer();
@@ -1186,6 +1191,10 @@ document.addEventListener("click", async (e)=>{
   if(b.dataset.path) return openViewer({path:b.dataset.path, task:b.dataset.of, in:b.dataset.in});
   if(b.dataset.view) return openViewer({path:b.dataset.view, task:b.dataset.of, in:"folder"});
   if(b.id==="pause") return api("/api/pause"); if(b.id==="resume") return api("/api/resume");
+  if(b.id==="say-send"){ const ta = $("#say"), text = ta.value.trim(); if(!text) return; b.disabled = true;
+    try{ const r = await fetch("/api/say",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text, task:drawer||""})});
+      const j = await r.json(); if(!r.ok) return alertBox(j.error||"Could not send"); ta.value = ""; $("#say-reply").textContent = j.reply||"sent"; }
+    finally { b.disabled = false; } return; }
   if(b.id==="d-close") return closeDrawer();
   if(b.id==="w-jump"){ scrollTo({top:0, behavior:reduce.matches?"auto":"smooth"}); return $("#w-title").focus({preventScroll:true}); }
   if(b.dataset.settle || b.dataset.unsettle) return settle(b.dataset.settle || b.dataset.unsettle, !!b.dataset.settle);
@@ -1200,6 +1209,7 @@ document.addEventListener("click", async (e)=>{
   if(act==="approve-plan" || act==="send-plan") return sendPlan(b);
   if(act==="resume") return api("/api/resume");
   if(act==="accept") return api("/api/accept",{task:b.dataset.task});
+  if(act==="approve-changes"){ b.disabled = true; try{ await api("/api/approve",{answers:[], comment:""}); } finally { b.disabled = false; } return; }
   if(act==="merge"){ b.disabled = true; try{ await api("/api/merge"); } finally { b.disabled = false; } return; }
   if(act==="todo"){ b.disabled = true; try{ await api("/api/todo",{n:+b.dataset.n}); } finally { b.disabled = false; } return; }
   if(act==="answer"){ const ta = document.querySelector(`textarea[data-answer="${CSS.escape(b.dataset.task)}"]`); if(!ta.value.trim()) return ta.focus();

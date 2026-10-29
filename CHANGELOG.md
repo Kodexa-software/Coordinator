@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.11.0 - 2026-10-30
+
+Reworked after two measured assessments: Coordinator's diffs ranked first, but it took 3 to 5 times as long and
+2 to 3 times the cost of a plain session on small and medium work, and stalled for hours on one question.
+
+- Three modes, picked by `/coordinate` and named in one line: **direct** (a single change built in your session,
+  then checked by a fresh reviewer), **quick** (`coord start --quick`: one background builder, no planner) and
+  **run** (the planned team).
+- The officer checks a plan once, and only in full auto or for plans of more than three tasks, on Sonnet. A
+  must-fix names the sentence, file or task it breaks; `notes` approves with should-fix items. It no longer audits
+  each task: the reviewer checks that everything in the diff traces to your words.
+- No question blocks a run: every agent question carries a default, which applies by itself after 10 minutes (3 in
+  full auto). Builders may make the small test edits a type or name change forces, and list them.
+- The project's rules settle commit and push: Coordinator's commit and push of the run branch meet them, so agents
+  no longer ask. Agents don't re-read instruction files Claude Code already loaded, and builders skip the
+  orientation reading the planner already did.
+- The gate: builders run a fast `check`; the scheduler runs the full `gate` once per task, off its loop, after a
+  `pre_gate` command, re-runs it once before blaming the code, and hands a fix agent the error lines, not the tail.
+  One fix per task, other merges wait while the gate is red, and a failure the run didn't cause is recorded for you
+  instead of looping. The base branch's new commits merge into the run branch after each task.
+- The scheduler adopts running agents after a restart or an update (pid and start time), so nothing is lost or
+  started twice; it restarts itself when `coord` changes. One scheduler per run, held by a lock. Agents with no
+  progress for 30 minutes are stopped and resumed once; builders past 1.5 times their time box are told to wrap up
+  and `coord task rest` what is left.
+- `coord add` no longer stops the build: approved work keeps going and only the new tasks wait for approval.
+  `coord say` (and a message box on the live page) routes one message to an answer, a running task or more work.
+- `coord stats` and `.coordinator/metrics.jsonl` keep every run's time, cost, stages and gates after `terminate`.
+  The live page and status lines show cost first.
+- `coord selftest` starts and resumes one tiny agent the way runs do; `coord start` runs it once per Claude Code
+  version, and `coord update` after updating, so a CLI change can't silently break every agent again.
+- Every `gh pr` call targets the `origin` remote's repository, so repos with an `upstream` remote work.
+- Plans: the planner fills `check`, splits by file or area instead of by step, and is asked once to justify a long
+  chain; the plan card shows the plan's shape and other open runs that touch the same files.
+- Models: planner at medium effort by default (`--effort high` for big runs), officer and writer on Sonnet at low
+  cost, reviewer effort now applied.
+- Windows: prompts and role text go through stdin and files, not the command line; an npm `claude.cmd` is started
+  through its node script; toast notifications; `tasks.json` reads retry while a writer replaces it.
+- Screenshots: builders of UI tasks can shoot their own worktree, in the browsers `shots.browsers` lists, and the
+  reviewer checks them.
+
 ## 0.10.3 - 2026-10-29
 
 - The pull request description is one short paragraph, one to three lines, on what the change does and why. The

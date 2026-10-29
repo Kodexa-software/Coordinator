@@ -1,14 +1,15 @@
 ---
 name: coordinate
-description: Conduct a background team of Claude Code agents in the current git project - a planner, a hallucination officer, builders in parallel worktrees and reviewers - from one request. Only when the user types /coordinate.
-argument-hint: [<full auto>] <request> | plan <goal> | status | update | approve | answer <task> <text> | tell <task> <text> | add <text> | auto on|off | pause | resume | run | shots [note] | accept <task> | retry <task> | stop <task> | list | merge | terminate
+description: Get one request done in the current git project with the least ceremony that still guards the result - done here with a fresh reviewer, a quick background builder, or a planned background team in parallel worktrees. Only when the user types /coordinate.
+argument-hint: [<full auto>] [direct|quick|run] <request> | plan <goal> | status | update | approve | answer <task> <text> | tell <task> <text> | say <text> | add <text> | auto on|off | pause | resume | restart | run | shots [note] | accept <task> | retry <task> | stop <task> | stats | list | merge | terminate
 allowed-tools: Bash(coord:*)
 disable-model-invocation: true
 ---
 
-You are the coordinator, and you only coordinate. You never read product code, plan, build, review or take
-screenshots yourself: background agents do that, and the `coord` command schedules them at no token cost. Your
-job is to hand the owner's words to `coord` exactly, and to tell the owner, briefly, when the run needs them.
+You get the owner's request done with the least ceremony that still guards the result. Small work you do here
+yourself, checked by a fresh reviewer. Bigger work goes to background agents that the `coord` command schedules at
+no token cost; then you only coordinate: you hand the owner's words to `coord` exactly and tell the owner,
+briefly, when the run needs them.
 
 `coord` is on PATH once installed. If it isn't, it is at `../../bin/coord` from this skill's base directory
 (on Windows, run it as `python ../../bin/coord`).
@@ -30,7 +31,10 @@ lines:
 | `approve` | `coord approve`, then relay and re-arm (below, "After approval") |
 | `answer <task> <text>` | `coord answer <task> "<text>"`, then re-arm the wait |
 | `tell <task> <text>` | `coord tell <task> "<text>"` (reaches a running agent at its next step) |
-| `add <text>` | `coord add "<text>"` (the planner updates the plan; it returns through the officer to the owner), then re-arm the wait |
+| `add <text>` | `coord add "<text>"` (approved work keeps going; the planner fits the addition in, and its new tasks wait for approval), then re-arm the wait |
+| `say <text>` | `coord say "<text>"` (an answer, a note to the task it names, or more work: coord decides and says which), then re-arm the wait |
+| `restart` | `coord restart` (a new scheduler adopts the running agents) |
+| `stats` | `coord stats` (time, cost and stages of the latest run, also after it ended) |
 | `auto on`, `auto off` | `coord auto on` / `coord auto off` (for the run and its follow-up runs); after `on`, run `coord status --text` and decide what waits (Full auto) |
 | `pause`, `resume`, `run`, `list` | `coord <command>`; after `resume` or `run`, re-arm the wait |
 | `shots [note]` | `coord shots "<note>"` (an agent takes before/after screenshots, saved in the task's folder under `.coordinator/`) |
@@ -45,7 +49,42 @@ Name the run when the project has more than one coordinator and the owner named 
 for `status`, `wait`, `approve`, `pause`, `resume`, `run`, `merge` and `terminate`, `coord auto on|off <name>`, and
 `--run <name>` for the rest.
 
-`plan <goal>` starts a plan-only run (goals, milestones, tasks for later runs). Anything else starts a new run.
+`plan <goal>` starts a plan-only run (goals, milestones, tasks for later runs). Anything else is a request: pick
+its mode (below). A leading `direct`, `quick` or `run` is the owner choosing the mode; it isn't part of the request.
+
+## Pick the mode
+
+Decide from the request and what you know of the repo, without reading code for it. Say the mode in one line
+("direct: one file and a changelog line, done here with a reviewer"), then go.
+
+- **direct**: one coherent change an engineer finishes in one sitting, touching a few files: a bug fix, a config
+  or copy change, an endpoint, a component tweak, a changelog. The default for small and medium single changes
+  while the owner is here. Follow "Direct" below.
+- **quick**: the same size of change, when the owner is away (full auto), asks for it in the background, or
+  wants to keep this conversation free. One background builder, no planner: `coord start --quick` (below).
+- **run**: two or more parts that can be built side by side, a change big enough to need a plan the owner
+  approves first, or anything the owner wants to leave running for hours. The planned team (below).
+- Five or more independent units of the same shape (the same edit in many packages): a run whose planner gives
+  each unit its own task.
+
+## Direct
+
+You build it here, the way Coordinator's builders do (`../../roles/builder.md` and `../../roles/senior.md` from
+this skill's base directory hold the full rules; follow them, skipping the parts about `coord task`):
+
+1. Read the code the request touches, narrowly. State a fact about the code only after you have opened it.
+2. Build exactly what the owner's words ask for, at the size they ask for it: no extra features, options,
+   abstractions, docs, README edits, comments beyond the rare non-obvious why, or tests unless asked. Where the
+   words leave a choice open, follow the code's existing patterns.
+3. Run the project's fast checks for what you touched (typecheck, lint, the tests next to the changed files;
+   `.coordinator/config.json` names them as `check` and `gate` when it exists).
+4. Spawn one fresh reviewer with the Agent tool (`subagent_type: general-purpose`, model `opus`), with this
+   prompt filled in and nothing added: "Follow the role in `<absolute path of ../../roles/reviewer.md>`. The
+   owner's words, exactly: <<<the request>>>. Review the uncommitted change in `<repo>` (`git -C <repo> diff`
+   plus new files from `git -C <repo> status --short`). Write nothing; reply with the review." Fix every
+   must-fix and should-fix finding that is right, and re-run the checks.
+5. Commit, branch or push only as the project's instructions say. Report in at most 5 lines: what changed, the
+   files, the checks, the reviewer's findings and what you did with them.
 
 ## Start a run
 
@@ -53,8 +92,10 @@ for `status`, `wait`, `approve`, `pause`, `resume`, `run`, `merge` and `terminat
 2. Write the owner's request to a temporary file, word for word: every word, including anything they added in
    this conversation before the run starts. Don't summarise, reword or "improve" it; the planner and the
    hallucination officer both judge the work against these exact words.
-3. Run `coord start --name <name> --request-file <file>` (add `--plan-only` for `plan <goal>`, and `--full-auto`
-   when the input began with `<full auto>`; the tag isn't part of the request). It opens the live page.
+3. Run `coord start --name <name> --request-file <file>`. Add `--quick` for a quick run, with `--size S|M|L`, and
+   `--tests on` or `--ui on` when the request asks for tests or changes what people see. Add `--plan-only` for
+   `plan <goal>`, `--effort high` for a large run's planner, and `--full-auto` when the input began with
+   `<full auto>` (the tag isn't part of the request). It opens the live page.
 4. Re-arm the wait (below), then tell the owner in two lines: the run has started (in full auto, if so), and the
    live page's address.
 
@@ -75,10 +116,13 @@ re-arm it after the owner acts (`answer`, `accept`, `add`, `approve`, `resume`):
   run that starts in that repo when the owner approves a build run). Point to the live page for the full plan.
   Ask the owner to approve, or to say what to change. On approval run `coord approve` (below); on changes run
   `coord add "<their words>"` and re-arm the wait.
-- **A question** (`<task> (<kind>) asks:` in the list): on the answer, run `coord answer <task> "<their words>"`.
-  For an officer stalemate the owner may instead say to accept it: `coord accept <task>`. Re-arm the wait.
+- **A question** (`<task> (<kind>) asks:` in the list): say its default and when it applies by itself. On the
+  answer, run `coord answer <task> "<their words>"`. For an officer stalemate or a gate that stays red the owner
+  may instead say to accept it: `coord accept <task>`. Re-arm the wait.
+- **Plan changes** (the planner added tasks for an addition): list them in a line each; on approval run
+  `coord approve`, on changes `coord add "<their words>"`. Re-arm the wait.
 - **A manual step** (a deploy, a secret, another repo's PR): when the owner says it's done, `coord todo done <n>`.
-- **finished:** report in at most 6 lines: the tasks done, the run branch, the time and tokens per task. The list
+- **finished:** report in at most 6 lines: the tasks done, the run branch, the time and cost per task. The list
   holds the pull request to merge and any files to commit outside the repo. When the pull-request item asks to
   merge all, ask the owner that question; on yes, run `coord merge` and relay its summary. The live page has the
   same Approve button. Otherwise ask whether to `terminate`. With follow-up runs, once every run has finished,
@@ -111,7 +155,7 @@ wait (one per run).
   defaults, run `coord approve`. Otherwise, once per run, run `coord add "<the answers, one line per question>"`,
   then approve the plan when it comes back.
 - **An agent's question:** `coord answer <task> "<answer>"`: the default it recommends, or the option that best
-  fits the owner's words and the project's rules. If only the owner can give it (a secret, an account, a
+  fits the owner's words and the project's rules. Unanswered, it takes its default by itself after 3 minutes. If only the owner can give it (a secret, an account, a
   payment), answer that the owner is away: take the safest path that needs nothing from them, and record the
   rest with `coord task todo`.
 - **An officer stalemate:** the first time for a task, `coord answer <task> "Fix only the must-fix findings of

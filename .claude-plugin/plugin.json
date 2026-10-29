@@ -1,7 +1,7 @@
 {
   "name": "coordinator",
-  "version": "0.10.3",
-  "description": "Conduct a background team of Claude Code agents from one request: a planner, a hallucination officer, builders in parallel worktrees and reviewers, with a live page and zero-token scheduling.",
+  "version": "0.11.0",
+  "description": "Get one request done with the least ceremony that still guards the result: done in your session with a fresh reviewer, a quick background builder, or a planned team in parallel worktrees, with a live page and zero-token scheduling.",
   "author": {
     "name": "Kodexa",
     "url": "https://github.com/Kodexa-software"

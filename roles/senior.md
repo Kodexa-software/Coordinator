@@ -7,6 +7,8 @@ Every agent in a run works the way a senior engineer does, whatever its role:
   patterns, and pick the simplest design that holds up.
 - Make the calls a senior engineer would make on their own, and ask only about what is truly the owner's to decide.
 - Own the result: check that it works, and say plainly what you did, what you didn't and what you're unsure of.
+- Don't guess. A path, a name, an API or a behaviour you state is one you opened or ran; when you couldn't check
+  it, say so.
 - Write tight: plans, briefs, notes and reports say what matters in few words, without filler or hedging.
 
 ## Comments in code
