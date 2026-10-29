@@ -33,8 +33,10 @@ Reworked after two measured assessments: Coordinator's diffs ranked first, but i
 - Every `gh pr` call targets the `origin` remote's repository, so repos with an `upstream` remote work.
 - Plans: the planner fills `check`, splits by file or area instead of by step, and is asked once to justify a long
   chain; the plan card shows the plan's shape and other open runs that touch the same files.
-- Models: planner at medium effort by default (`--effort high` for big runs), officer and writer on Sonnet at low
-  cost, reviewer effort now applied.
+- Models: officer and writer on Sonnet at low cost, reviewer effort now applied. The planner stays on Opus at high
+  effort: a run is now only for bigger work, and its plan is the design.
+- The reviewer opens every module the diff newly imports and checks where it may run; planners say in each brief
+  which runtime a new module is for.
 - Windows: prompts and role text go through stdin and files, not the command line; an npm `claude.cmd` is started
   through its node script; toast notifications; `tasks.json` reads retry while a writer replaces it.
 - Screenshots: builders of UI tasks can shoot their own worktree, in the browsers `shots.browsers` lists, and the

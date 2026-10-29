@@ -74,7 +74,7 @@ DEFAULTS = {
               "browsers": ["chromium"]},
     "models": {"planner": "opus", "builder": "opus", "reviewer": "opus", "officer": "sonnet", "shooter": "haiku",
                "mapper": "opus", "briefer": "sonnet", "writer": "sonnet"},
-    "efforts": {"planner": "medium", "builder": "high", "reviewer": "medium", "officer": "medium",
+    "efforts": {"planner": "high", "builder": "high", "reviewer": "medium", "officer": "medium",
                 "officer_task": "medium", "shooter": "low", "mapper": "medium",
                 "briefer": "low", "writer": "low"},
     # plan: "auto" audits a plan only in full auto or when it has more than 3 tasks; "always" and "never" too

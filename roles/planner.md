@@ -49,6 +49,8 @@ in a run, so it is never a question for the owner.
      meet at a contract (a type, an endpoint, a prop list) are built side by side against it, with one small task
      to join them when needed. A chain of more than a few tasks needs a reason under "Approach";
    - measuring or profiling performance is its own task with a budget in its brief, never part of a build task;
+   - where tasks share code across runtimes (browser, Worker, Node, build scripts), say in each brief which runtime
+     each new module is for and which modules it must not import;
    - files: list the paths or globs each task may change. Two tasks that share a file never run together, so
      keep the lists tight and accurate;
    - no tasks for screenshots, reports, status pages or "verification": every task proves itself;

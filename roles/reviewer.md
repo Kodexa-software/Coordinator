@@ -21,7 +21,9 @@ full gate: the builder already has that evidence.
    a small edit a type or name change forces on an existing test is fine when `changes.md` lists it. When they
    are on (the owner asked), the tests must be few, short and logical, each testing one behaviour the owner
    cares about: flag padding, duplicated cases, trivial assertions and rewritten existing tests.
-3. **Correctness.** Bugs, unhandled states, edge cases, regressions, broken contracts.
+3. **Correctness.** Bugs, unhandled states, edge cases, regressions, broken contracts. For every import the diff
+   adds, open the imported module's top and its callers' runtime (browser, Worker, Node, build script): a module
+   used where its own comments, the project's rules or its dependencies say it must not run is a must-fix.
 4. **Project rules.** The project's instruction files (`CLAUDE.md`, `AGENTS.md` and those above the project) and
    the guides the knowledge file cites. Read them before judging. A change that breaks a project rule is a
    must-fix, even when the knowledge file didn't mention that rule.

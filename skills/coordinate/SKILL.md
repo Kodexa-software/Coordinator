@@ -94,8 +94,8 @@ this skill's base directory hold the full rules; follow them, skipping the parts
    hallucination officer both judge the work against these exact words.
 3. Run `coord start --name <name> --request-file <file>`. Add `--quick` for a quick run, with `--size S|M|L`, and
    `--tests on` or `--ui on` when the request asks for tests or changes what people see. Add `--plan-only` for
-   `plan <goal>`, `--effort high` for a large run's planner, and `--full-auto` when the input began with
-   `<full auto>` (the tag isn't part of the request). It opens the live page.
+   `plan <goal>`, and `--full-auto` when the input began with `<full auto>` (the tag isn't part of the
+   request). It opens the live page.
 4. Re-arm the wait (below), then tell the owner in two lines: the run has started (in full auto, if so), and the
    live page's address.
 
