@@ -238,6 +238,7 @@ main{max-width:1500px;margin:0 auto;padding:22px 24px 72px}
 .tabs button{flex:none;padding:12px 12px 13px;border:0;border-radius:var(--co-radius-sm) var(--co-radius-sm) 0 0;background:none;
   color:var(--co-muted);font:600 var(--co-text-sm)/1 var(--co-font-sans);cursor:pointer;transition:color var(--co-dur-quick) var(--co-ease-arrive)}
 .tabs button:hover,.tabs button.on{color:var(--co-ink)}
+.tabs .count{margin:-4px 0 -4px 4px}
 .tabs::after{content:"";position:absolute;left:0;bottom:0;height:2px;width:var(--w,0);transform:translateX(var(--x,0));
   border-radius:2px;background:var(--co-accent);pointer-events:none}
 .tabs.ready::after{transition:transform var(--co-dur-base) var(--co-ease-move),width var(--co-dur-base) var(--co-ease-move)}
@@ -374,6 +375,38 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
 .f-item:hover .f-ext{background:var(--co-surface)}
 .f-name{flex:1;min-width:0;font-family:var(--co-font-mono);font-size:var(--co-text-xs);overflow-wrap:anywhere}
 .f-size{flex:none;color:var(--co-muted);font-size:0.75rem;font-variant-numeric:tabular-nums}
+/* Images as thumbnails, ahead of the other files */
+.f-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin:0 0 12px;padding:0;list-style:none}
+.f-tile{position:relative}
+.f-thumb{display:grid;gap:7px;width:100%;padding:6px 6px 8px;border:1px solid var(--co-line);border-radius:var(--co-radius-md);background:var(--co-surface);
+  color:var(--co-ink);text-align:left;cursor:pointer;
+  transition:border-color var(--co-dur-quick) var(--co-ease-arrive),background-color var(--co-dur-quick) var(--co-ease-arrive)}
+.f-thumb:hover{border-color:var(--co-line-strong);background:var(--co-sunken)}
+.f-thumb img{display:block;width:100%;aspect-ratio:4/3;object-fit:contain;border-radius:var(--co-radius-sm);background:var(--co-sunken)}
+.f-thumb.broken img{visibility:hidden}
+.f-thumb .f-name{padding:0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The Files tab: the run folder, then each task's folder */
+.files{display:grid;gap:14px;max-width:1100px}
+.f-group{padding:16px 18px 10px}
+.f-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px;font-size:var(--co-text-sm);font-weight:var(--co-weight-strong)}
+.f-path{color:var(--co-muted);font:500 var(--co-text-xs) var(--co-font-mono);overflow-wrap:anywhere}
+.f-group .f-list{margin:0 -10px}
+/* Each file also opens in its own tab or shows in its folder */
+.f-row{display:flex;align-items:center;gap:2px}
+.f-row .f-item{flex:1;min-width:0}
+a.f-item{text-decoration:none}
+.f-acts{flex:none;display:flex;gap:2px}
+.f-act{display:inline-grid;place-items:center;width:30px;height:30px;padding:0;border:0;border-radius:var(--co-radius-sm);background:none;
+  color:var(--co-muted);cursor:pointer;transition:background-color var(--co-dur-quick) var(--co-ease-arrive),color var(--co-dur-quick) var(--co-ease-arrive)}
+.f-act:hover{background:var(--co-sunken);color:var(--co-ink)}
+.f-tile .f-acts{position:absolute;top:10px;right:10px;padding:2px;border-radius:var(--co-radius-md);background:var(--co-surface);box-shadow:var(--co-shadow-1)}
+.f-tile .f-act{width:26px;height:26px}
+@media (hover:hover){
+  .f-tile .f-acts{opacity:0;transition:opacity var(--co-dur-quick) var(--co-ease-arrive)}
+  .f-tile:hover .f-acts,.f-tile:focus-within .f-acts{opacity:1}
+}
+/* Images a note embeds */
+.md img.md-img{display:block;max-width:100%;height:auto;margin:8px 0 14px;border:1px solid var(--co-line);border-radius:var(--co-radius-md)}
 
 /* File viewer: a modal over the page, slow to arrive, quick to leave */
 .viewer{position:fixed;inset:0;z-index:20;display:grid;grid-template:minmax(0,1fr)/minmax(0,1fr);place-items:center;padding:28px;visibility:hidden;transition:visibility 0s linear var(--co-dur-quick)}
@@ -402,6 +435,7 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
 .v-none{display:grid;gap:4px;justify-items:center;padding:48px 16px;text-align:center}
 .v-none b{font-size:var(--co-text-base);font-weight:var(--co-weight-strong)}
 .v-none span{color:var(--co-muted);font-size:var(--co-text-xs)}
+.v-acts{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:14px}
 
 @media (max-width:1100px){.board{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:640px){
@@ -487,10 +521,12 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
     <button data-tab="board" class="on" role="tab" aria-selected="true">Tasks</button>
     <button data-tab="plan" role="tab" aria-selected="false">Plan</button>
     <button data-tab="request" role="tab" aria-selected="false">Request</button>
+    <button data-tab="files" role="tab" aria-selected="false">Files <span class="count" id="files-n">0</span></button>
   </div>
   <section id="tab-board"><div class="board" id="board"></div></section>
   <section id="tab-plan" hidden><div class="card plan"><div class="waves" id="waves"></div><div class="md" id="plan"></div><div class="reports" id="audits"></div></div></section>
   <section id="tab-request" hidden><div class="card request" id="request"></div></section>
+  <section id="tab-files" hidden><p class="empty" id="files-none" hidden>No files yet. Agents' notes, screenshots and reports show up here as they write them.</p><div class="files" id="files"></div></section>
 </main>
 <aside id="drawer" aria-labelledby="d-title">
   <div class="d-head">
@@ -506,6 +542,10 @@ aside.open{transform:none;visibility:visible;transition:transform var(--co-dur-b
   <div class="v-panel">
     <div class="v-head">
       <div class="grow"><h2 id="v-title"></h2><div class="v-meta" id="v-meta"></div></div>
+      <a class="btn icon" id="v-open" target="_blank" rel="noopener" title="Open in a new tab" aria-label="Open in a new tab" hidden>
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M9 3h4v4M13 3L7.5 8.5M11.5 9.5V13H3V4.5h3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+      <button class="btn icon" id="v-reveal" hidden>
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 4.5a1 1 0 0 1 1-1h3L8 5h4.5a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></button>
       <button class="btn icon" id="v-close" aria-label="Close the file">
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
     </div>
@@ -530,7 +570,10 @@ function fmtMin(m){ m = Math.round(m||0); return m >= 60 ? Math.floor(m/60)+"h "
 function since(iso){ if(!iso) return ""; const s = (Date.now()-Date.parse(iso))/1000; return s < 90 ? Math.round(s)+"s" : s < 5400 ? Math.round(s/60)+"m" : (s/3600).toFixed(1)+"h"; }
 
 function inline(s){
-  return s.replace(/`([^`]+)`/g,"<code>$1</code>").replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>")
+  return s.replace(/`([^`]+)`/g,"<code>$1</code>")
+          .replace(/!\[([^\]]*)\]\(((?!https?:)[^)\s]+)\)/g,'<img class="md-img" data-img="$2" alt="$1">')
+          .replace(/\[([^\]]+)\]\(((?!https?:|mailto:|#)[^)\s]+)\)/g,'<a data-ref="$2">$1</a>')
+          .replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>")
           .replace(/(^|[^*])\*([^*\s][^*]*)\*/g,"$1<em>$2</em>").replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 function md(src){
@@ -561,7 +604,7 @@ function md(src){
 }
 
 // Rendering helpers: write only what changed, so refreshes don't flicker or replay motion.
-function setHTML(el, html){ if(el._html !== html){ el.innerHTML = html; el._html = html; } }
+function setHTML(el, html){ if(el._html === html) return false; el.innerHTML = html; el._html = html; return true; }
 function replay(el, cls){ el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); }
 
 // Keyed lists: items [{key, parent, cls, html, attrs}] in order. New items enter, gone items fade out,
@@ -859,15 +902,17 @@ function render(s){
   renderBoard(s);
   setHTML($("#request"), esc(s.request) + (s.owner_notes||[]).map((n)=>`<div class="note"><div class="sub">${esc(n.at.slice(0,16).replace("T"," "))} · ${esc(n.kind)}${n.task?" to "+esc(n.task):""}</div>${esc(n.text)}</div>`).join(""));
   setHTML($("#waves"), waves(s.tasks));
+  $("#files-n").textContent = (s.folder||[]).length + s.tasks.reduce((a,t)=>a+(t.folder||[]).length,0);
+  if(!$("#tab-files").hidden) renderFiles();
   if(drawer) openDrawer(drawer, true);
 }
 
 async function renderPlan(){
   if(!state) return;
-  setHTML($("#plan"), state.plan_present ? md(await text("", "plan.md")) : '<p class="empty">The planner is still writing the plan.</p>');
+  if(setHTML($("#plan"), state.plan_present ? md(await text("", "plan.md")) : '<p class="empty">The planner is still writing the plan.</p>')) markPaths($("#plan"), "", "folder");
   const audits = state.plan_audits || [];
-  setHTML($("#audits"), audits.length ? `<h2>Officer reports</h2>` +
-    (await Promise.all(audits.map(async (f)=>`<details class="card report"><summary>${esc(f)}</summary><div class="md">${md(await text("", f))}</div></details>`))).join("") : "");
+  if(setHTML($("#audits"), audits.length ? `<h2>Officer reports</h2>` +
+    (await Promise.all(audits.map(async (f)=>`<details class="card report"><summary>${esc(f)}</summary><div class="md">${md(await text("", f))}</div></details>`))).join("") : "")) markPaths($("#audits"), "", "folder");
 }
 
 // The drawer's tabs: the task's notes, every file in its folder, then its agents' conversation once one has started.
@@ -882,8 +927,8 @@ async function showFile(id){
   const body = $("#d-body"), isConv = drawerFile===CONV, isFiles = drawerFile===FILES;
   body.classList.toggle("md", !isConv && !isFiles); conv = null;
   if(isConv) body.innerHTML = '<div class="c-pick" id="c-pick" role="group" aria-label="Agent"></div><div class="c-log" id="c-log"></div>';
-  else if(isFiles){ body.innerHTML = '<ul class="f-list" id="f-list" aria-label="Files in the task folder"></ul>'; renderFolder(state.tasks.find((x)=>x.id===id)); }
-  else { body.innerHTML = drawerFile ? md(await text(id, drawerFile)) : '<p class="empty">Nothing written yet.</p>'; if(drawerFile==="changes.md") markPaths(body, id); }
+  else if(isFiles){ body.innerHTML = '<div id="f-list"></div>'; renderFolder(state.tasks.find((x)=>x.id===id)); }
+  else { body.innerHTML = drawerFile ? md(await text(id, drawerFile)) : '<p class="empty">Nothing written yet.</p>'; markPaths(body, id, "folder"); }
   body.scrollTop = 0; replay(body, "fade");
   if(isConv){ const t = state.tasks.find((x)=>x.id===id), pick = convChoices(t), live = liveSession(t);
     pickConv(pick.find((c)=>c.key===live) || pick[0]); }
@@ -955,6 +1000,7 @@ async function loadConv(){
           if(!first) el.classList.add("fade");
           const call = e.k==="result" && e.for && log.querySelector(`[data-call="${CSS.escape(e.for)}"]`);
           (call || log).append(el);
+          if(el.querySelector("a[data-ref],img[data-img]")) markPaths(el, drawer, "", false);
         });
         // Follow the conversation only when the owner is already at the end.
         if(first ? t && liveSession(t)===c.key : end) body.scrollTo({top:body.scrollHeight, behavior:first||reduce.matches?"auto":"smooth"});
@@ -966,15 +1012,46 @@ async function loadConv(){
   finally{ c.busy = false; }
 }
 
-// The task folder's files, each opening in the viewer.
+// A folder's files, every one: images as thumbnails first, then the rest. A click opens the viewer, or the file's own
+// tab for what the browser plays itself (video, audio, PDF, a page). Each also opens in a new tab or shows in its
+// folder. `task` is "" for the run folder.
 function fmtSize(n){ return n < 1024 ? n+" B" : n < 1048576 ? Math.round(n/1024)+" KB" : (n/1048576).toFixed(1)+" MB"; }
+const IMG = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i, OWN_TAB = /\.(mp4|m4v|webm|mov|ogv|mp3|m4a|wav|ogg|oga|flac|aac|opus|pdf|html?)$/i;
+function viewURL(o){ return "/api/view?" + new URLSearchParams(Object.entries(o).filter((x)=>x[1])); }
+// A file under the run folder, raw, by its path there
+function fileURL(rel){ return "/files/" + rel.split("/").map(encodeURIComponent).join("/"); }
+const ICON_TAB = $("#v-open svg").outerHTML, ICON_DIR = $("#v-reveal svg").outerHTML;
+function revealLabel(){ return state && state.platform==="darwin" ? "Show in Finder" : "Show in its folder"; }
+function fileActs(url, reveal, name){
+  return `<span class="f-acts"><a class="f-act" href="${esc(url)}" target="_blank" rel="noopener" title="Open in a new tab" aria-label="Open ${esc(name)} in a new tab">${ICON_TAB}</a>` +
+    `<button class="f-act" ${reveal} title="${revealLabel()}" aria-label="${revealLabel()}: ${esc(name)}">${ICON_DIR}</button></span>`;
+}
+function filesHTML(files, task){
+  const imgs = files.filter((f)=>IMG.test(f.name)), rest = files.filter((f)=>!IMG.test(f.name)), of = `data-of="${esc(task)}"`;
+  const url = (f) => fileURL((task ? `tasks/${task}/` : "") + f.name), acts = (f) => fileActs(url(f), `data-reveal="${esc(f.name)}" ${of} data-in="folder"`, f.name);
+  return (imgs.length ? `<ul class="f-grid" aria-label="Images">` + imgs.map((f)=>`<li class="f-tile"><button class="f-thumb" data-view="${esc(f.name)}" ${of} title="${esc(f.name)} · ${fmtSize(f.size)}">` +
+      `<img src="${esc(url(f)+"?v="+f.mtime)}" alt="" loading="lazy" decoding="async"><span class="f-name">${esc(f.name)}</span></button>${acts(f)}</li>`).join("") + "</ul>" : "") +
+    (rest.length ? `<ul class="f-list" aria-label="Files">` + rest.map((f)=>{ const ext = (f.name.match(/\.([A-Za-z0-9]{1,5})$/)||[,"file"])[1];
+      const inner = `<span class="f-ext" aria-hidden="true">${esc(ext)}</span><span class="f-name">${esc(f.name)}</span><span class="f-size">${fmtSize(f.size)}</span>`;
+      return `<li class="f-row">` + (OWN_TAB.test(f.name) ? `<a class="f-item" href="${esc(url(f))}" target="_blank" rel="noopener">${inner}</a>`
+        : `<button class="f-item" data-view="${esc(f.name)}" ${of}>${inner}</button>`) + acts(f) + "</li>"; }).join("") + "</ul>" : "");
+}
 function renderFolder(t){
   const el = $("#f-list"); if(!el || !t) return;
-  setHTML(el, (t.folder||[]).map((f)=>{ const ext = (f.name.match(/\.([A-Za-z0-9]{1,5})$/)||[,"file"])[1];
-    return `<li><button class="f-item" data-view="${esc(f.name)}"><span class="f-ext" aria-hidden="true">${esc(ext)}</span><span class="f-name">${esc(f.name)}</span><span class="f-size">${fmtSize(f.size)}</span></button></li>`; }).join(""));
+  setHTML(el, filesHTML(t.folder||[], t.id));
+}
+// The Files tab: the run folder's files, then each task's, one card per folder, each redrawn only when it changes.
+function renderFiles(){
+  if(!state) return;
+  const groups = [{key:"@run", task:"", title:"Run folder", path:`.coordinator/${state.name}/`, files:state.folder||[]}]
+    .concat(state.tasks.map((t)=>({key:t.id, task:t.id, title:`${t.id} · ${t.title}`, path:`.coordinator/${state.name}/tasks/${t.id}/`, files:t.folder||[]})))
+    .filter((g)=>g.files.length);
+  $("#files-none").hidden = groups.length > 0;
+  sync("files", groups.map((g)=>({key:g.key, parent:$("#files"), cls:"card f-group",
+    html:`<h2 class="f-h"><span>${esc(g.title)}</span><span class="count">${g.files.length}</span><span class="f-path">${esc(g.path)}</span></h2>` + filesHTML(g.files, g.task)})));
 }
 // File paths written in a note (`bin/coord`, `/abs/path/x.png`, `viewer/index.html:12`) open in the viewer.
-const EXT = /\.(md|png|jpe?g|gif|webp|svg|json|jsonl|ya?ml|toml|txt|log|py|js|mjs|cjs|ts|tsx|jsx|css|html|sh|astro|csv|lock)$/i;
+const EXT = /\.(md|png|jpe?g|gif|webp|avif|bmp|ico|svg|json|jsonl|ya?ml|toml|txt|log|py|js|mjs|cjs|ts|tsx|jsx|css|html|sh|astro|csv|lock)$/i;
 function asPath(s){
   s = s.trim().replace(/:\d+(-\d+)?$/,"");
   if(!s || s.length > 400 || /[<>"'`|*?$(){}\[\]=;:,\\]|^[~-]/.test(s) || (/\s/.test(s) && s[0]!=="/")) return "";
@@ -982,37 +1059,63 @@ function asPath(s){
 }
 // Only paths the viewer can open are marked (each asked once), so a branch name or a MIME type isn't a dead end.
 const opens = new Map();
-function canOpen(path, task){
-  const k = task+"\n"+path;
-  if(!opens.has(k)) opens.set(k, fetch("/api/view?"+new URLSearchParams(Object.assign({path, meta:"1"}, task?{task}:{})),{cache:"no-store"})
+function canOpen(o){
+  const k = viewURL(o);
+  if(!opens.has(k)) opens.set(k, fetch(viewURL(Object.assign({meta:"1"}, o)),{cache:"no-store"})
     .then((r)=>r.ok).catch(()=>{ opens.delete(k); return false; }));
   return opens.get(k);
 }
-async function markPaths(root, task){
-  const codes = [...root.querySelectorAll("code")].filter((c)=>!c.closest("pre,a")).map((c)=>[c, asPath(c.textContent)]).filter((x)=>x[1]);
-  const ok = await Promise.all(codes.map(([,p])=>canOpen(p, task)));
-  codes.forEach(([c,p],i)=>{ if(ok[i] && c.isConnected){ c.dataset.path = p; c.tabIndex = 0; c.setAttribute("role","button"); c.title = "Open "+p; } });
+// "/a/b" + "../c.png" -> "/a/c.png"
+function joinPath(dir, p){
+  const out = dir.split("/").filter(Boolean);
+  p.split("/").forEach((x)=>{ if(x==="..") out.pop(); else if(x && x!==".") out.push(x); });
+  return "/"+out.join("/");
+}
+// A path in code is looked up the way agents write them (worktree, project, then the task's folder). A Markdown link
+// or image is relative to its note: `dir` is the note's folder on disk, "folder" the task's (or run's) folder, and ""
+// means as written, like code (an agent's message). `codes: false` marks only the links and images.
+function unmark(el){ if(el.tagName==="IMG"){ const c = document.createElement("code"); c.textContent = el.dataset.img; el.replaceWith(c); }
+  else if(el.dataset.ref) el.replaceWith(el.textContent); }
+async function markPaths(root, task, dir, codes){
+  const rel = (p) => p[0]==="/" || !dir ? {path:p, task} : dir==="folder" ? {path:p, task, in:"folder"} : {path:joinPath(dir, p), task};
+  const marks = (codes===false ? [] : [...root.querySelectorAll("code")].filter((c)=>!c.closest("pre,a")).map((c)=>[c, asPath(c.textContent)]).filter((x)=>x[1])
+    .map(([c,p])=>[c, {path:p, task}]))
+    .concat([...root.querySelectorAll("a[data-ref],img[data-img]")].map((el)=>[el, rel(el.dataset.ref || el.dataset.img)]));
+  const ok = await Promise.all(marks.map(([,o])=>canOpen(o)));
+  marks.forEach(([el,o],i)=>{
+    if(!el.isConnected) return;
+    if(!ok[i]) return unmark(el);
+    el.dataset.path = o.path; el.dataset.of = task || ""; if(o.in) el.dataset.in = o.in;
+    el.tabIndex = 0; el.setAttribute("role","button"); el.title = "Open "+o.path;
+    if(el.tagName==="IMG") el.src = viewURL(o);
+  });
 }
 
 // The viewer: one file at a time over the page, read-only, served by this machine's own coordinator.
 let viewSeq = 0, viewOpener = null;
 const BEHIND = ["header.top","main","#drawer"];
-function viewNone(title, detail){ return `<div class="v-none"><b>${esc(title)}</b><span>${esc(detail)}</span></div>`; }
-async function openViewer(path, folder){
-  const v = $("#viewer"), body = $("#v-body"), seq = ++viewSeq, task = drawer || "";
+function viewNone(title, detail, acts){ return `<div class="v-none"><b>${esc(title)}</b><span>${esc(detail)}</span>${acts||""}</div>`; }
+// `o`: {path, task, in}. Without a task, the open drawer's; `in: "folder"` looks only in the task's (or run's) folder.
+async function openViewer(o){
+  const v = $("#viewer"), body = $("#v-body"), seq = ++viewSeq, path = o.path, task = o.task ?? (drawer || "");
   if(!v.classList.contains("open")){ viewOpener = document.activeElement; BEHIND.forEach((s)=>$(s).inert = true); v.classList.add("open"); }
   const name = path.split("/").filter(Boolean).pop() || path;
-  $("#v-title").textContent = name; $("#v-meta").textContent = path;
+  $("#v-title").textContent = name; $("#v-meta").textContent = path; $("#v-open").hidden = $("#v-reveal").hidden = true;
   body.className = "v-body"; body.innerHTML = '<p class="empty">Opening…</p>'; body.scrollTop = 0;
   $("#v-close").focus({preventScroll:true});
-  const q = "/api/view?" + new URLSearchParams(Object.assign({path}, task?{task}:{}, folder?{in:"folder"}:{}));
+  const q = viewURL({path, task, in:o.in});
   let m = null;
   try{ const r = await fetch(q+"&meta=1",{cache:"no-store"}); m = r.ok ? await r.json() : null; }catch(e){}
   if(seq!==viewSeq) return;
   const show = (html, cls) => { body.className = "v-body"+(cls?" "+cls:""); body.innerHTML = html; body.scrollTop = 0; replay(body, "fade"); };
   if(!m) return show(viewNone("Can't open this file", "It isn't in this run's folders, or it's no longer there."));
   $("#v-title").textContent = m.name; $("#v-meta").textContent = `${m.path} · ${fmtSize(m.size)}`;
-  if(!m.ok) return show(viewNone("Can't preview this file", `${m.name} · ${fmtSize(m.size)}${m.kind==="binary"?"":" · too large to show"}`));
+  // Files under the run folder also open in their own tab; any file shows in its folder.
+  const rel = state && state.dir && m.path.startsWith(state.dir+"/") ? fileURL(m.path.slice(state.dir.length+1)) : "", rv = $("#v-reveal");
+  $("#v-open").hidden = !rel; if(rel) $("#v-open").href = rel;
+  rv.hidden = false; rv.dataset.reveal = m.path; rv.dataset.of = ""; rv.title = revealLabel(); rv.setAttribute("aria-label", revealLabel());
+  if(!m.ok) return show(viewNone("Can't preview this file", `${m.name} · ${fmtSize(m.size)}${m.kind==="binary"?"":" · too large to show"}`,
+    `<div class="v-acts">${rel?`<a class="btn" href="${esc(rel)}" target="_blank" rel="noopener">Open in a new tab</a>`:""}<button class="btn" data-reveal="${esc(m.path)}" data-of="">${revealLabel()}</button></div>`));
   if(m.kind==="image"){
     show(`<img class="v-img" alt="${esc(m.name)}">`, "img");
     const img = body.querySelector("img");
@@ -1025,7 +1128,7 @@ async function openViewer(path, folder){
   try{ const r = await fetch(q,{cache:"no-store"}); src = r.ok ? await r.text() : null; }catch(e){}
   if(seq!==viewSeq) return;
   if(src===null) return show(viewNone("Can't preview this file", `${m.name} · ${fmtSize(m.size)}`));
-  if(m.kind==="markdown") return show(md(src), "md");
+  if(m.kind==="markdown"){ show(md(src), "md"); return markPaths(body, task, m.path.replace(/\/[^/]*$/,"")); }
   const lines = src.replace(/\n$/,"").split("\n");
   show(`<pre class="v-code">${lines.map((l)=>"<span>"+esc(l)+"</span>").join("")}</pre>`);
 }
@@ -1065,21 +1168,23 @@ function showTab(tab){
   const tabs = $("#tabs");
   tabs.querySelectorAll("[data-tab]").forEach((x)=>{ const on = x.dataset.tab===tab; x.classList.toggle("on",on); x.setAttribute("aria-selected",on); });
   placeBar(tabs);
-  ["board","plan","request"].forEach((x)=>{ const el = $("#tab-"+x);
+  ["board","plan","request","files"].forEach((x)=>{ const el = $("#tab-"+x);
     if(x!==tab) el.hidden = true; else if(el.hidden){ el.hidden = false; replay(el, "view-in"); } });
   if(tab==="plan") renderPlan();
+  if(tab==="files") renderFiles();
 }
 
 document.addEventListener("click", async (e)=>{
   const menu = $("#prs").getAttribute("aria-expanded")==="true", focus = document.activeElement;
   if(menu && !e.target.closest("#prs-wrap")) prMenu(false, !focus || focus===document.body);
   if(e.target.closest("#prs")) return prMenu(!menu);
-  const b = e.target.closest("[data-path],[data-view],#v-close,#v-back,#w-jump,[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],[data-settle],[data-unsettle],#d-close,#pause,#resume,#auto");
+  const b = e.target.closest("[data-reveal],[data-path],[data-view],#v-close,#v-back,#w-jump,[data-act],[data-tab],[data-open-tab],[data-task].task,[data-file],[data-conv],[data-settle],[data-unsettle],#d-close,#pause,#resume,#auto");
   if(!b) return;
   if(b.id==="auto"){ b.disabled = true; try{ await api("/api/auto",{on:b.getAttribute("aria-checked")!=="true"}); } finally { b.disabled = false; } return; }
   if(b.id==="v-close" || b.id==="v-back") return closeViewer();
-  if(b.dataset.path) return openViewer(b.dataset.path);
-  if(b.dataset.view) return openViewer(b.dataset.view, true);
+  if(b.dataset.reveal) return api("/api/reveal",{path:b.dataset.reveal, task:b.dataset.of||"", in:b.dataset.in||""});
+  if(b.dataset.path) return openViewer({path:b.dataset.path, task:b.dataset.of, in:b.dataset.in});
+  if(b.dataset.view) return openViewer({path:b.dataset.view, task:b.dataset.of, in:"folder"});
   if(b.id==="pause") return api("/api/pause"); if(b.id==="resume") return api("/api/resume");
   if(b.id==="d-close") return closeDrawer();
   if(b.id==="w-jump"){ scrollTo({top:0, behavior:reduce.matches?"auto":"smooth"}); return $("#w-title").focus({preventScroll:true}); }
@@ -1128,10 +1233,13 @@ document.addEventListener("keydown",(e)=>{
     return;
   }
   const p = e.target.closest && e.target.closest("[data-path]");
-  if(p && p.tagName!=="BUTTON" && (e.key==="Enter" || e.key===" ")){ e.preventDefault(); return openViewer(p.dataset.path); }
+  if(p && p.tagName!=="BUTTON" && (e.key==="Enter" || e.key===" ")){ e.preventDefault(); return openViewer({path:p.dataset.path, task:p.dataset.of, in:p.dataset.in}); }
   const t = e.target.closest && e.target.closest(".task");
   if(t && (e.key==="Enter" || e.key===" ")){ e.preventDefault(); openDrawer(t.dataset.task); }
 });
+// An image that can't be shown (too large, gone): a thumbnail keeps its tile and name, a note's image becomes its path.
+document.addEventListener("error",(e)=>{ const el = e.target; if(!el.closest) return;
+  const t = el.closest(".f-thumb"); if(t) t.classList.add("broken"); else if(el.matches("img.md-img[data-img]")) unmark(el); }, true);
 addEventListener("resize",()=>{ placeBar($("#tabs"), true); if(drawer) placeBar($("#d-tabs"), true); });
 
 $("#board").innerHTML = COLS.map(([key,label])=>`<section class="col" id="col-${key}" aria-label="${label}"><h2 class="col-h"><span>${label}</span><span class="count">0</span></h2><div class="list"></div></section>`).join("");
@@ -1149,7 +1257,7 @@ async function refresh(){
        render(s); if(!$("#tab-plan").hidden) renderPlan(); }
   catch(e){ ended("The coordinator is not answering. It may have been terminated."); }
 }
-refresh().then(()=>{ const tab = location.hash.slice(1); if(["plan","request"].includes(tab)) showTab(tab); });
+refresh().then(()=>{ const tab = location.hash.slice(1); if(["plan","request","files"].includes(tab)) showTab(tab); });
 setInterval(refresh, 3000);
 </script>
 </body>
