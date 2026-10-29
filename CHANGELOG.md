@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0 - 2026-10-29
+
+- Every agent works like a senior engineer: it understands the code before changing or judging it, follows the
+  project's patterns, makes its own calls, owns the result and writes tight.
+- Agents write code that needs no comments. A comment appears only where a senior engineer would add one, as a
+  short line on a non-obvious why; no narration, restated code, banners, TODOs or commented-out code. The reviewer
+  flags anything more. A project's own comment rules still win.
+
 ## 0.7.0 - 2026-10-29
 
 - A Files tab on the live page lists every file in the run's folder and in each task's folder, hidden files included

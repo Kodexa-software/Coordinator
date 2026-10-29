@@ -607,7 +607,8 @@ def role_of(t):
 
 
 def role_prompt(role):
-    return (ROOT / "roles" / ("%s.md" % role)).read_text()
+    # Every role works as a senior engineer and keeps comments to what one would write
+    return (ROOT / "roles" / ("%s.md" % role)).read_text() + (ROOT / "roles" / "senior.md").read_text()
 
 
 def session_exists(sid):
