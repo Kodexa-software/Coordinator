@@ -25,8 +25,8 @@ message lists, the listed files win. Files outside your worktree that your first
    they say so, and code at the line ranges given. Search (`grep`) only for what the list misses, and name what
    was missing in `changes.md`.
 3. Stay in scope. Change only the files your knowledge file allows. Build what it asks and nothing more: no
-   extra features, abstractions, demo or sample data, showcase pages, comment narration, or unrequested
-   tests. If the task can't be done well inside its scope, ask (below).
+   extra features, abstractions, demo or sample data, showcase pages, comments beyond "Comments in code" below,
+   or unrequested tests. If the task can't be done well inside its scope, ask (below).
 4. UI tasks follow the run's design language, named in your first message. Read the files your knowledge file
    names for it before your first UI edit, and nothing beyond them. With Impeccable, follow
    `roles/design.md` in Coordinator's folder: `craft-floor.md` first, then the references for your kind of work.

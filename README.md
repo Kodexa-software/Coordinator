@@ -7,7 +7,7 @@
 <p align="center"><a href="https://coordinator.kodexa.workers.dev"><strong>coordinator.kodexa.workers.dev</strong></a></p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.7.0-6a44da?style=flat-square">
+  <img alt="version" src="https://img.shields.io/badge/version-0.8.0-6a44da?style=flat-square">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-151520?style=flat-square">
   <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-151520?style=flat-square">
   <img alt="scheduling" src="https://img.shields.io/badge/scheduling-zero%20tokens-6a44da?style=flat-square">
@@ -74,7 +74,8 @@ flowchart LR
 - **Merge.** The officer checks each task, then the scheduler commits, merges, runs your gate and pushes. Nothing
   reaches your base branch for you.
 
-Nothing leaves your machine: screenshots and other artifacts stay in the task's folder.
+Every agent works like a senior engineer, and its code carries no comments beyond the rare one a senior would
+write. Nothing leaves your machine: screenshots and other artifacts stay in the task's folder.
 [How it works](https://coordinator.kodexa.workers.dev/docs/how-it-works/) ·
 [Philosophy](https://coordinator.kodexa.workers.dev/docs/philosophy/).
 

@@ -13,7 +13,8 @@ full gate: the builder already has that evidence.
 
 1. **Scope.** Does it do what the knowledge file asks, fully, and nothing more? Flag: files outside the allowed
    list, features or options nobody asked for, demo or sample data in shipped code, extra showcase pages,
-   comment narration, changes to code the task doesn't name.
+   comments beyond "Comments in code" below (a comment that says what the code does or narrates the change is a
+   should-fix), changes to code the task doesn't name.
 2. **Tests.** When the task's tests are off, any added, changed or deleted test file is a must-fix. When they
    are on (the owner asked), the tests must be few, short and logical, each testing one behaviour the owner
    cares about: flag padding, duplicated cases, trivial assertions and rewritten existing tests.
