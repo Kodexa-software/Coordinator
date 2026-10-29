@@ -7,7 +7,7 @@
 <p align="center"><a href="https://coordinator.kodexa.workers.dev"><strong>coordinator.kodexa.workers.dev</strong></a></p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.10.0-6a44da?style=flat-square">
+  <img alt="version" src="https://img.shields.io/badge/version-0.10.1-6a44da?style=flat-square">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-151520?style=flat-square">
   <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-151520?style=flat-square">
   <img alt="scheduling" src="https://img.shields.io/badge/scheduling-zero%20tokens-6a44da?style=flat-square">

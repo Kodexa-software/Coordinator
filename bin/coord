@@ -1191,13 +1191,6 @@ def pr_body(r, data):
         out = ([goal, ""] if goal else []) + ["Work in progress: %d of %d merged." % (
             sum(1 for t in tasks if t.get("merged")), len(tasks)), ""]
         out += ["- [%s] %s" % ("x" if t.get("merged") else " ", t["title"]) for t in tasks] + [""]
-    # The run's task files go when it ends, so what is left for the owner stays here too
-    todos = [x for x in data.get("todos") or [] if not x.get("done")]
-    external = sorted({f for t in data["tasks"] if t.get("status") == "done" for f in (t.get("external") or [])})
-    if todos or external:
-        out += ["## Left to do", ""]
-        out += ["- %s" % x["text"] for x in todos]
-        out += ["- Commit `%s` (changed outside this repository)" % f for f in external] + [""]
     followups = data.get("followups") or []
     if followups:
         out += ["## Related changes in other repositories", ""]

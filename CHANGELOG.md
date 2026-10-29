@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.1 - 2026-10-29
+
+- The pull request no longer ends with a "Left to do" section. Manual steps and files changed outside the repo stay
+  on the live page and in `coord todo` and `coord status`.
+
 ## 0.10.0 - 2026-10-29
 
 - Coordinator runs on Windows. `install.ps1` (or `install.sh` from Git Bash) links `/coordinate` to the clone with a

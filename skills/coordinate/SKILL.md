@@ -120,7 +120,7 @@ wait (one per run).
 - **The scheduler stopped:** `coord resume` once. If it stops again, leave it for the owner.
 - **A follow-up run:** it is in full auto too. Wait on it and decide for it the same way, with `coord -C "<repo>"`.
 - **Manual steps and files outside the repo:** they stay for the owner; never mark them done. They don't hold up
-  the merge, and the pull request lists them under "Left to do".
+  the merge.
 - **finished:** when the pull-request item asks to merge all, run `coord merge` from the first run. It merges every
   pull request in order, then ends every run: their agents, scheduler, live page, worktrees, task branches and task
   files. While follow-up runs still work, wait on them; when the last one finishes, check the first run with

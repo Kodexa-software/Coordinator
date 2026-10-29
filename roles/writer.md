@@ -30,8 +30,8 @@ or filler.
 
 Write as the engineer who made the change: "Moves service history onto the shared lookup table", not "T3 rebuilt
 the component". Leave out task ids, statuses, times, tokens, agents, roles, the plan, the owner's request quoted
-back, and how the work was organised. No emojis and no selling words. The steps left for the owner are added
-below your text, so leave them out too.
+back, and how the work was organised. No emojis and no selling words. Leave out the steps left for the owner
+too.
 
 When `pr.md` is written, run `coord task done`.
 
