@@ -1191,11 +1191,6 @@ def pr_body(r, data):
         out = ([goal, ""] if goal else []) + ["Work in progress: %d of %d merged." % (
             sum(1 for t in tasks if t.get("merged")), len(tasks)), ""]
         out += ["- [%s] %s" % ("x" if t.get("merged") else " ", t["title"]) for t in tasks] + [""]
-    followups = data.get("followups") or []
-    if followups:
-        out += ["## Related changes in other repositories", ""]
-        out += ["- **%s**: `%s` (%s)" % (Path(f["repo"]).name, f.get("run") or f.get("name", ""), f.get("status", "pending"))
-                for f in followups] + [""]
     return "\n".join(out).strip() + "\n"
 
 

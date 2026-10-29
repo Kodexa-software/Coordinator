@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.2 - 2026-10-29
+
+- The pull request description is a short paragraph on what the change does and why, then `## Changes`. Nothing
+  else: no Decisions, Testing or Notes sections, and no list of related changes in other repositories.
+
 ## 0.10.1 - 2026-10-29
 
 - The pull request no longer ends with a "Left to do" section. Manual steps and files changed outside the repo stay
