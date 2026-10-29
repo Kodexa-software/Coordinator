@@ -1,6 +1,6 @@
 # Coordinator fixes (from the macOS runs, Oct 2026)
 
-**Status:** planned, nothing started
+**Status:** done in 0.11.0 except what [final-report.md](final-report.md) lists under "Not done"
 **For:** this repo: [`bin/coord`](../bin/coord) and [`roles/`](../roles)
 **Measured on:** Coordinator 0.7–0.9 runs on the founder's Mac, 27–29 Oct 2026; code checked against 0.10.3 (`8da731e`)
 **Report:** https://coordinator.kodexa.workers.dev/reports/coordinator-old-vs-new/ (charts, timelines, all runs)

@@ -1,6 +1,6 @@
 # Coordinator fixes (from the Windows comparison, Oct 2026)
 
-**Status:** planned, nothing started except P0
+**Status:** done in 0.11.0 except what [final-report.md](final-report.md) lists under "Not done"
 **For:** this repo: [`bin/coord`](../bin/coord), [`roles/`](../roles), [`skills/coordinate/SKILL.md`](../skills/coordinate/SKILL.md), the live page
 **Measured on:** Coordinator 0.10.3 against a plain session, the Agent tool and eforge, Windows 11, 29 Oct 2026
 **Report:** [windows-report.md](windows-report.md)
