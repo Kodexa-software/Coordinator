@@ -12,7 +12,6 @@ Agents run as separate background `claude -p` sessions.
 """
 import argparse
 import datetime as dt
-import fcntl
 import hashlib
 import json
 import mimetypes
@@ -32,6 +31,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
+
+WINDOWS = os.name == "nt"
+if WINDOWS:
+    import ctypes
+    import msvcrt
+    import winreg
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.OpenProcess.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong)
+    kernel32.GetExitCodeProcess.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+    kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+else:
+    import fcntl
 
 ROOT = Path(__file__).resolve().parent.parent
 HOME = Path(os.environ.get("COORD_HOME") or Path.home() / ".coordinator")
@@ -85,8 +97,49 @@ def now():
     return dt.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def argv(cmd):
+    # CreateProcess finds only .exe files on PATH, so npx.cmd and the like are resolved first
+    args = [str(c) for c in cmd]
+    if WINDOWS and args:
+        args[0] = shutil.which(args[0]) or args[0]
+    return args
+
+
+def spawn(cmd, **kw):
+    """Start a process that outlives this one, in its own session (its own process group on Windows)."""
+    cmd = argv(cmd) if isinstance(cmd, list) else cmd
+    if not WINDOWS:
+        return subprocess.Popen(cmd, start_new_session=True, **kw)
+    flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    try:
+        return subprocess.Popen(cmd, creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB, **kw)
+    except OSError:  # the caller's job object doesn't allow breakaway
+        return subprocess.Popen(cmd, creationflags=flags, **kw)
+
+
+def coord_argv():
+    return [sys.executable] + (["-X", "utf8"] if WINDOWS else []) + [str(ROOT / "bin" / "coord")]
+
+
+def git_bash():
+    env = os.environ.get("CLAUDE_CODE_GIT_BASH_PATH")
+    if env and Path(env).is_file():
+        return env
+    g = shutil.which("git")
+    for up in Path(g).resolve().parents[1:3] if g else ():
+        if (up / "bin" / "bash.exe").is_file():
+            return str(up / "bin" / "bash.exe")
+    return None
+
+
+def sh(cmd):
+    """How to run a config command (setup, gate, dev): with sh, or Git Bash on Windows, so one command works on both."""
+    bash = git_bash() if WINDOWS else None
+    return ([bash, "-c", cmd], False) if bash else (cmd, True)
+
+
 def run(cmd, cwd=None, env=None, check=True):
-    r = subprocess.run([str(c) for c in cmd], cwd=cwd and str(cwd), env=env, text=True, capture_output=True)
+    r = subprocess.run(argv(cmd), cwd=cwd and str(cwd), env=env, text=True, capture_output=True)
     if check and r.returncode != 0:
         msg = (r.stderr or r.stdout).strip()[-800:]
         raise Fail("`%s` failed: %s" % (" ".join(str(c) for c in cmd[:4]), msg))
@@ -108,7 +161,14 @@ def write_json(path, data):
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-    os.replace(tmp, path)
+    for i in range(100):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:  # Windows refuses while a reader has the file open
+            if not WINDOWS or i == 99:
+                raise
+            time.sleep(0.05)
 
 
 def nonempty(path):
@@ -140,6 +200,27 @@ def remove_tree(path):
     return [str(Path(root) / n) for root, dirs, files in os.walk(path) for n in files] or [str(path)]
 
 
+@contextmanager
+def locked(path):
+    with open(path, "a+") as f:
+        if not WINDOWS:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            yield
+            return
+        f.seek(0)
+        while True:
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 def slug(text, n=40):
     s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return s[:n].strip("-") or "run"
@@ -148,6 +229,17 @@ def slug(text, n=40):
 def alive(pid):
     if not pid:
         return False
+    if WINDOWS:  # os.kill(pid, 0) would terminate the process here
+        try:
+            h = kernel32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+        except (ValueError, OverflowError, TypeError):
+            return False
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        ok = kernel32.GetExitCodeProcess(h, ctypes.byref(code))
+        kernel32.CloseHandle(h)
+        return bool(ok) and code.value == 259  # STILL_ACTIVE
     try:
         os.kill(int(pid), 0)
         return True
@@ -157,6 +249,12 @@ def alive(pid):
 
 def kill_group(pid, grace=5.0):
     if not alive(pid):
+        return
+    if WINDOWS:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(int(pid))], capture_output=True)
+        end = time.time() + grace
+        while time.time() < end and alive(pid):
+            time.sleep(0.2)
         return
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
@@ -180,6 +278,9 @@ def notify(title, text):
 
 
 def open_url(url):
+    if WINDOWS:
+        os.startfile(url)
+        return
     opener = "open" if sys.platform == "darwin" else "xdg-open"
     if shutil.which(opener):
         subprocess.run([opener, url], capture_output=True)
@@ -269,9 +370,10 @@ def project_instructions(project):
 
 def instructions_block(r, role):
     files, _ = project_instructions(r.project)
+    shell = ["Your Bash tool is Git Bash on Windows: write paths in commands with forward slashes (C:/dir/file)."]         if WINDOWS else []
     if not files:
-        return ["Project instructions: none found."]
-    lines = ["Project instructions: read these first, in full. They are the owner's current versions and come before "
+        return shell + ["Project instructions: none found."]
+    lines = shell + ["Project instructions: read these first, in full. They are the owner's current versions and come before "
              "your role wherever the two disagree, including any guides they tell you to read:"]
     lines += ["- %s" % f for f in files]
     if role == "builder":
@@ -323,8 +425,7 @@ class Run:
 
     @contextmanager
     def edit(self):
-        with open(self.dir / ".lock", "a+") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+        with locked(self.dir / ".lock"):
             data = self.load()
             yield data
             data["updated"] = now()
@@ -335,8 +436,7 @@ class Run:
 
     def set_state(self, **kw):
         self.brain.mkdir(parents=True, exist_ok=True)
-        with open(self.brain / ".lock", "a+") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+        with locked(self.brain / ".lock"):
             st = self.state()
             st.update(kw)
             write_json(self.brain / "run.json", st)
@@ -630,8 +730,10 @@ def write_agent_files(r):
         "effort": r.cfg["efforts"]["briefer"],
         "tools": ["Read", "Grep", "Glob", "Bash", "Write"]}}
     write_json(r.brain / "agents.json", agents)
-    hook = '"%s" "%s" _hook' % (sys.executable, ROOT / "bin" / "coord")
-    settings = {"permissions": {"deny": list(r.cfg["deny"])},
+    hook = " ".join('"%s"' % c.replace("\\", "/") for c in coord_argv()) + " _hook"
+    # On Windows agents get Bash (Git Bash) only, so the Bash deny rules and hook checks cover every shell command
+    deny = list(r.cfg["deny"]) + (["PowerShell"] if WINDOWS else [])
+    settings = {"permissions": {"allow": ["Bash(coord:*)"], "deny": deny},
                 "hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": hook}]}]}}
     write_json(r.brain / "settings.json", settings)
 
@@ -640,8 +742,27 @@ def agent_env(r, tid, role, cwd):
     env = dict(os.environ)
     env.update(COORD_PROJECT=str(r.project), COORD_RUN_DIR=str(r.dir), COORD_TASK=tid, COORD_ROLE=role, COORD_ROOT=str(ROOT),
                CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD="1",
-               COORD_WT=str(cwd), PATH="%s%s%s" % (ROOT / "bin", os.pathsep, env.get("PATH", "")))
+               COORD_WT=str(cwd), PATH="%s%s%s" % (shim_dir() if WINDOWS else ROOT / "bin", os.pathsep, env.get("PATH", "")))
     return env
+
+
+def write_shims(bin_dir):
+    """`coord` for Git Bash and `coord.cmd` for cmd and PowerShell, both running this checkout with this Python."""
+    py, script = sys.executable, str(ROOT / "bin" / "coord")
+    shims = {"coord": '#!/bin/sh\nexec "%s" -X utf8 "%s" "$@"\n' % (py.replace("\\", "/"), script.replace("\\", "/")),
+             "coord.cmd": '@"%s" -X utf8 "%s" %%*\r\n' % (py, script)}
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    for name, text in shims.items():
+        f = bin_dir / name
+        if not f.exists() or f.read_text() != text:
+            with open(f, "w", newline="") as out:
+                out.write(text)
+
+
+def shim_dir():
+    d = HOME / "bin"
+    write_shims(d)
+    return d
 
 
 def ensure_branch(r, data):
@@ -654,7 +775,8 @@ def setup_worktree(r, wt):
         return
     (r.brain / "logs").mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, COORD_MAIN=str(r.project), COORD_WT=str(wt))
-    res = subprocess.run(r.cfg["setup"], shell=True, cwd=str(wt), env=env, capture_output=True, text=True)
+    args, shell = sh(r.cfg["setup"])
+    res = subprocess.run(args, shell=shell, cwd=str(wt), env=env, capture_output=True, text=True)
     (r.brain / "logs" / ("setup-%s.log" % wt.name)).write_text(res.stdout + res.stderr)
 
 
@@ -854,9 +976,15 @@ def start_job(r, kind, tid):
     out_path = logs / ("%s-%d.json" % (tid, n))
     out = open(out_path, "w")
     err = open(logs / ("%s-%d.err" % (tid, n)), "w")
-    proc = subprocess.Popen([str(c) for c in cmd], cwd=str(cwd), env=agent_env(r, tid, role, cwd),
-                            stdout=out, stderr=err, stdin=subprocess.DEVNULL, start_new_session=True)
+    stdin = subprocess.DEVNULL
+    if WINDOWS and len(subprocess.list2cmdline(argv(cmd))) > 30000:  # CreateProcess caps a command line at 32767
+        prompt_file = logs / ("%s-%d.prompt" % (tid, n))
+        prompt_file.write_text(str(cmd.pop()))
+        stdin = open(prompt_file)
+    proc = spawn(cmd, cwd=str(cwd), env=agent_env(r, tid, role, cwd), stdout=out, stderr=err, stdin=stdin)
     out.close()
+    if stdin is not subprocess.DEVNULL:
+        stdin.close()
     r.log("started %s %s (%s, pid %d)" % (role, tid, kind, proc.pid))
     return Job(kind, tid, role, proc, out_path, err)
 
@@ -983,7 +1111,8 @@ def integrate(r, tid):
     if r.cfg.get("gate"):
         logf = r.brain / "logs" / ("gate-%s.log" % tid)
         with open(logf, "w") as f:
-            ok = subprocess.run(r.cfg["gate"], shell=True, cwd=str(runwt / r.cfg.get("gate_cwd", ".")),
+            args, shell = sh(r.cfg["gate"])
+            ok = subprocess.run(args, shell=shell, cwd=str(runwt / r.cfg.get("gate_cwd", ".")),
                                 stdout=f, stderr=subprocess.STDOUT).returncode == 0
     if not ok:
         add_fix(r, tid, "gate", "\n".join(logf.read_text().splitlines()[-60:]))
@@ -1281,9 +1410,8 @@ def start_daemon(r, which):
         return False
     (r.brain / "logs").mkdir(parents=True, exist_ok=True)
     log = open(r.brain / "logs" / ("%s.out" % which), "a")
-    subprocess.Popen([sys.executable, str(ROOT / "bin" / "coord"), "_%s" % which, "--project", str(r.project), "--run", r.name],
-                     cwd=str(r.project), stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                     start_new_session=True)
+    spawn(coord_argv() + ["_%s" % which, "--project", str(r.project), "--run", r.name],
+          cwd=str(r.project), stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
     log.close()
     if which == "viewer":
         for _ in range(40):
@@ -1536,7 +1664,7 @@ def start_followups(r):
             req.write_text("%s\n\n[coordinator context: started by run '%s' in %s when the owner approved its plan. This "
                            "run's part: %s. The rest is built there. This run's own plan still waits for the owner's approval.]\n"
                            % (words, r.name, r.project, f["note"].rstrip(".")))
-            p = subprocess.run([sys.executable, str(ROOT / "bin" / "coord"), "start", "--name", name, "--request-file",
+            p = subprocess.run(coord_argv() + ["start", "--name", name, "--request-file",
                                 str(req), "--no-open"] + auto, cwd=f["repo"], env=env, text=True, capture_output=True,
                                stdin=subprocess.DEVNULL, timeout=300)
             m = re.search(r"^started (\S+) - planning\. Live page: (\S+)", p.stdout, re.M)
@@ -1782,6 +1910,54 @@ def coord_version():
     return (read_json(ROOT / ".claude-plugin" / "plugin.json", {}) or {}).get("version", "?")
 
 
+def is_link(p):
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return False
+    return stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def add_to_user_path(folder):
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE) as k:
+        try:
+            value, kind = winreg.QueryValueEx(k, "Path")
+        except FileNotFoundError:
+            value, kind = "", winreg.REG_EXPAND_SZ
+        parts = [x for x in value.split(";") if x]
+        want = os.path.normcase(str(folder)).rstrip("\\")
+        if any(os.path.normcase(os.path.expandvars(x)).rstrip("\\") == want for x in parts):
+            return False
+        winreg.SetValueEx(k, "Path", 0, kind, ";".join(parts + [str(folder)]))
+    ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0x0002, 5000, None)  # WM_SETTINGCHANGE
+    return True
+
+
+def cmd_install(a):
+    """Windows install.sh: links /coordinate and `coord` to this checkout, so `git pull` updates them."""
+    if not WINDOWS:
+        raise Fail("run %s instead" % (ROOT / "install.sh"))
+    bin_dir = Path(os.environ.get("COORD_BIN_DIR") or Path.home() / ".local" / "bin")
+    skills = Path.home() / ".claude" / "skills"
+    link, target = skills / "coordinate", ROOT / "skills" / "coordinate"
+    if not shutil.which("claude"):
+        print("warning: the claude CLI is not on PATH; agents can't start without it", file=sys.stderr)
+    skills.mkdir(parents=True, exist_ok=True)
+    if is_link(link):
+        if os.path.normcase(os.path.realpath(link)) != os.path.normcase(str(target.resolve())):
+            os.rmdir(link) if os.path.isdir(link) or not os.path.exists(link) else os.unlink(link)
+    elif link.exists():
+        raise Fail("%s already exists and is not a link to Coordinator; move it away, then run this again" % link)
+    if not link.exists():
+        res = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True, text=True)
+        if res.returncode:
+            raise Fail("couldn't link %s: %s" % (link, (res.stderr or res.stdout).strip()))
+    write_shims(bin_dir)
+    if add_to_user_path(bin_dir):
+        print("note: added %s to your user PATH; open a new terminal and restart VS Code to pick it up" % bin_dir)
+    print("Coordinator installed: coord -> %s, /coordinate -> %s" % (bin_dir / "coord", link))
+
+
 def cmd_update(a):
     if not (ROOT / ".git").exists():
         print("Coordinator is installed as a plugin here. Update it with:\n"
@@ -1791,7 +1967,7 @@ def cmd_update(a):
     res = run(["git", "-C", ROOT, "pull", "--ff-only"], check=False)
     if res.returncode:
         raise Fail("couldn't update %s: %s" % (ROOT, (res.stderr or res.stdout).strip()[-300:]))
-    subprocess.run([str(ROOT / "install.sh")], capture_output=True)
+    subprocess.run(coord_argv() + ["_install"] if WINDOWS else [str(ROOT / "install.sh")], capture_output=True)
     after = coord_version()
     if after == before:
         print("Coordinator %s is up to date." % after)
@@ -1941,7 +2117,7 @@ def merge_all(r):
     failed = []
     for p in reversed(prs):
         try:
-            res = subprocess.run([sys.executable, str(ROOT / "bin" / "coord"), "terminate", p["run"]], cwd=p["repo"],
+            res = subprocess.run(coord_argv() + ["terminate", p["run"]], cwd=p["repo"],
                                  env=other_repo_env(), text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=300)
         except subprocess.TimeoutExpired:
             failed.append(p["run"])
@@ -1968,9 +2144,8 @@ def start_merge(r):
             raise Fail("gh is not on PATH")
         (r.brain / "logs").mkdir(parents=True, exist_ok=True)
         with open(r.brain / "logs" / "merge.out", "a") as log:
-            p = subprocess.Popen([sys.executable, str(ROOT / "bin" / "coord"), "merge", r.name], cwd=str(r.project),
-                                 env=other_repo_env(), stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                 start_new_session=True)
+            p = spawn(coord_argv() + ["merge", r.name], cwd=str(r.project),
+                      env=other_repo_env(), stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         d["merge"] = {"status": "merging", "pid": p.pid, "error": "", "steps": []}
 
 
@@ -1981,7 +2156,7 @@ def owner_only(a):
     rd = os.environ.get("COORD_RUN_DIR")
     if not os.environ.get("COORD_ROLE") or not rd or a.cmd in AGENT_CMDS or (a.cmd == "todo" and a.action != "done"):
         return False
-    if a.cmd == "update":
+    if a.cmd in ("update", "_install"):
         return True
     mine = Run(Path(rd).parent.parent, Path(rd).name)
     try:
@@ -2156,6 +2331,12 @@ def cmd_audit(a):
     print("verdict recorded: %s. End your turn now." % a.verdict)
 
 
+def under(path, folder):
+    """True when path is folder or inside it, ignoring case where the file system does (Windows)."""
+    p, f = os.path.normcase(path), os.path.normcase(os.path.realpath(folder))
+    return p == f or p.startswith(f.rstrip(os.sep) + os.sep)
+
+
 def cmd_hook(a):
     try:
         inp = json.load(sys.stdin)
@@ -2195,7 +2376,7 @@ def cmd_hook(a):
     wt = os.environ.get("COORD_WT", "")
     if tool in ("Edit", "Write", "NotebookEdit", "MultiEdit") and path and role == "builder" and t and not t.get("tests") and wt:
         real = os.path.realpath(os.path.expanduser(path))
-        if real.startswith(os.path.realpath(wt) + os.sep):
+        if under(real, wt):
             cfg = load_config(Path(rd).parent.parent)
             if is_test_file(cfg, os.path.relpath(real, os.path.realpath(wt))):
                 sys.stderr.write("Blocked: tests are OFF for this task - the owner didn't ask for them. Don't add, change "
@@ -2204,10 +2385,10 @@ def cmd_hook(a):
                 return 2
     if tool in ("Edit", "Write", "NotebookEdit", "MultiEdit") and path:
         real = os.path.realpath(os.path.expanduser(path))
-        if real == os.path.realpath(os.path.join(rd, "tasks.json")):
+        if os.path.normcase(real) == os.path.normcase(os.path.realpath(os.path.join(rd, "tasks.json"))):
             sys.stderr.write("Blocked: only `coord` writes tasks.json; change your own task with `coord task`.\n")
             return 2
-        inside = lambda x: real == os.path.realpath(x) or real.startswith(os.path.realpath(x) + os.sep)
+        inside = lambda x: under(real, x)
         allowed = [rd] + ([str(Path(rd).parent)] if role in ("planner", "mapper") else []) + ([wt] if role == "builder" and wt else [])
         if role == "builder" and t:
             allowed += list(t.get("external") or [])
@@ -2366,9 +2547,12 @@ def raw_type(p):
 
 def reveal(p):
     # Show the file in Finder (selected), or open its folder elsewhere.
+    if WINDOWS:
+        subprocess.Popen(["explorer", "/select,", str(p)])
+        return
     cmd = ["open", "-R", str(p)] if sys.platform == "darwin" else ["xdg-open", str(p.parent)]
     if shutil.which(cmd[0]):
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        spawn(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def view_path(r, raw, tid="", folder=False):
@@ -2722,9 +2906,9 @@ def cmd_shoot(a):
         for label, wt in (("before", base_wt), ("after", run_wt)):
             port = free_port()
             log = open(r.brain / "logs" / ("dev-%s.log" % label), "w")
-            p = subprocess.Popen(dev["command"].replace("{port}", str(port)), shell=True, cwd=str(wt / dev.get("cwd", ".")),
-                                 stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
-                                 env=dict(os.environ, PORT=str(port)))
+            args, shell = sh(dev["command"].replace("{port}", str(port)))
+            p = spawn(args, shell=shell, cwd=str(wt / dev.get("cwd", ".")),
+                      stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=dict(os.environ, PORT=str(port)))
             servers.append(p)
             urls[label] = "http://127.0.0.1:%d" % port
         r.set_state(dev_pids=[p.pid for p in servers])
@@ -2875,6 +3059,8 @@ def main(argv=None):
 
     p = sub.add_parser("_hook")
     p.set_defaults(fn=cmd_hook)
+    p = sub.add_parser("_install")
+    p.set_defaults(fn=cmd_install)
     for name, fn in (("_scheduler", cmd_scheduler), ("_viewer", cmd_viewer)):
         p = sub.add_parser(name)
         p.add_argument("--project", required=True)
@@ -2903,4 +3089,6 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    if WINDOWS and not sys.flags.utf8_mode:  # run files and agent output are UTF-8, not the ANSI code page
+        sys.exit(subprocess.run([sys.executable, "-X", "utf8"] + sys.argv).returncode)
     sys.exit(main())

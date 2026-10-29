@@ -7,6 +7,17 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 BIN="${COORD_BIN_DIR:-$HOME/.local/bin}"
 SKILLS="$HOME/.claude/skills"
 
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)  # Git Bash on Windows: links can't be made from here, so coord installs itself
+    for py in "py -3" python python3; do
+      if $py -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null; then
+        exec $py -X utf8 "$ROOT/bin/coord" _install
+      fi
+    done
+    echo "Coordinator needs Python 3.9+: winget install Python.Python.3.13" >&2
+    exit 1 ;;
+esac
+
 command -v python3 >/dev/null || { echo "Coordinator needs python3" >&2; exit 1; }
 command -v claude >/dev/null || echo "warning: the claude CLI is not on PATH; agents can't start without it" >&2
 

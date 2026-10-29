@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.10.0 - 2026-10-29
+
+- Coordinator runs on Windows. `install.ps1` (or `install.sh` from Git Bash) links `/coordinate` to the clone with a
+  junction, puts `coord` and `coord.cmd` in `~\.local\bin` and adds that folder to your user PATH, so `git pull`
+  and `coord update` keep it current.
+- On Windows, `coord` locks the task store with `msvcrt`, checks and stops agents with Windows process calls, starts
+  them in their own hidden process group and runs the project's `setup`, `gate` and `dev` commands in Git Bash, so
+  one config works on every OS. It always reads and writes UTF-8.
+- Agents on Windows use the Bash tool (Git Bash) only, so the deny rules and the hook cover every shell command.
+  Their write checks ignore the case of paths, like Windows does.
+- Agents' settings allow `Bash(coord:*)`, so auto mode never stops a background agent to ask before it runs
+  `coord`. Owner-only commands are still refused.
+- Line endings stay LF in every checkout (`.gitattributes`), so the shell scripts run in Git Bash.
+
 ## 0.9.0 - 2026-10-29
 
 - The pull request reads like a senior engineer wrote it. Once every task has merged, a new writer agent (Sonnet)

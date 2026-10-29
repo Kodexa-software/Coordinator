@@ -10,7 +10,8 @@ You are the coordinator, and you only coordinate. You never read product code, p
 screenshots yourself: background agents do that, and the `coord` command schedules them at no token cost. Your
 job is to hand the owner's words to `coord` exactly, and to tell the owner, briefly, when the run needs them.
 
-`coord` is on PATH once installed. If it isn't, it is at `../../bin/coord` from this skill's base directory.
+`coord` is on PATH once installed. If it isn't, it is at `../../bin/coord` from this skill's base directory
+(on Windows, run it as `python ../../bin/coord`).
 
 The owner's input: $ARGUMENTS
 
