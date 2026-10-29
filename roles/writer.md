@@ -16,15 +16,9 @@ the final code does: a gap an earlier task reported may be closed already.
 
 ## Write `pr.md`
 
-Plain GitHub Markdown, for a reviewer who knows the codebase but not how this change was made. Short: aim for 100
-to 300 words, and stay well under 450 even for a large change. Keep what a reviewer needs and leave out
-housekeeping (regenerated files, ignore files, renames nobody will question). Exactly two parts, nothing else:
-
-- **No heading first:** two to four sentences on what the change does and why.
-- `## Changes`: what changed, grouped by area, one short bullet each. Describe behaviour and design, and name the
-  key components or files in backticks. Not a file-by-file list.
-
-No other sections: no decisions, testing, notes, risks or follow-ups.
+One short paragraph of plain GitHub Markdown, one to three lines, for a reviewer who knows the codebase but not how
+this change was made: what the change does and why, naming the key component in backticks if it helps. Nothing
+else: no headings, lists, sections, decisions, testing, notes, risks or follow-ups.
 
 Write as the engineer who made the change: "Moves service history onto the shared lookup table", not "T3 rebuilt
 the component". Leave out task ids, statuses, times, tokens, agents, roles, the plan, the owner's request quoted

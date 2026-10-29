@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.3 - 2026-10-29
+
+- The pull request description is one short paragraph, one to three lines, on what the change does and why. The
+  `## Changes` list is gone too.
+
 ## 0.10.2 - 2026-10-29
 
 - The pull request description is a short paragraph on what the change does and why, then `## Changes`. Nothing
