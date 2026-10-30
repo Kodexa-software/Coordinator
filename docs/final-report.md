@@ -97,6 +97,28 @@ first and three in the second. The first 0.11 run imported a Node-only module in
 checked in the code and it is real. In the planned runs, the gate passed on the first try after every task, with
 no questions and no stalls.
 
+## Did quality drop after the changes?
+
+No, not overall. Cost and wall time fell by about half or more on every task both versions ran. On quality, the
+latest judgments rank the best 0.11 option level with 0.10.3 or above it. Three results came in below 0.10.3. Two
+came from the first round on the medium task, before the fixes that round led to. The third is quick mode, which
+this report advises against.
+
+Mean blind ranks from the same judges, lower is better:
+
+| Task and judges | 0.10.3 | 0.11 | 0.11 mode | Reading |
+|---|---:|---:|---|---|
+| Medium feature, 3 judges, 6 results | 4.3 | 1.3 | run, after the fix | Better |
+| Medium feature, 3 judges, 6 results | 4.3 | 3.3 | run, first | Better |
+| Medium feature, 3 judges, 4 results | 1.7 | 2.7 | run, first | Worse; led to the two fixes |
+| Medium feature, 3 judges, 4 results | 1.7 | 3.7 | direct | Worse; multi-area work now goes to run |
+| Small fix, 2 judges, 6 results | 2.5 | 2.5 | direct | Level, at 40% of the cost |
+| Small fix, 2 judges, 6 results | 2.5 | 4.5 | quick | Worse; shipped a Python 3.11 bug |
+
+So the fair claim is the same or better quality for about half the cost and a fraction of the time, with quick mode
+the exception. It is not proof of better quality: the strongest result comes from a run tuned on the same task it
+was measured on, and the judges disagree a lot.
+
 ## How far to trust this
 
 - **One run per configuration,** two for the plain medium run. The planned run after the fix was tuned on the same

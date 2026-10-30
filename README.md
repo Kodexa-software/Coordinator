@@ -72,14 +72,13 @@ End any active run first with `/coordinate terminate`. Plugin install:
 ```mermaid
 flowchart LR
     R([Your request]) --> P[Planner]
-    P --> O{Hallucination<br/>officer}
+    P --> O{Hallucination officer<br/>full auto or 4+ tasks}
     O -- revise --> P
     O -- approve --> Y([You approve<br/>the plan])
     Y --> B1[Builder T1] & B2[Builder T2] & B3[Builder T3]
     B1 & B2 & B3 --> V[Reviewer<br/>per task]
-    V --> Q{Officer<br/>per task}
-    Q -- revise --> B1
-    Q -- approve --> M[(Run branch<br/>+ gate)]
+    V -- revise --> B1
+    V -- approve --> M[(Run branch<br/>+ gate)]
 ```
 
 - **Plan.** The planner reads only the code your request touches and gives each task every file path it needs.
